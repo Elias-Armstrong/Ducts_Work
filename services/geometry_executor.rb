@@ -1,0 +1,559 @@
+module DuctExtension
+  module Services
+    class GeometryExecutor
+      DICTIONARY = "DuctExtension"
+
+      DEFAULT_BEND_RADIUS_FACTOR = 1.5
+
+      def self.execute(model, steps, network)
+        new(model, network).execute(steps)
+      end
+
+      def initialize(model, network)
+        @model = model
+        @network = network
+        @last_port = nil
+      end
+
+      def execute(steps)
+        steps = Array(steps).compact
+        return nil if steps.empty?
+
+        @model.start_operation("Draw Orthogonal Duct", true)
+
+        result = nil
+
+        steps.each do |step|
+          result =
+            case step.type
+            when :pipe
+              execute_pipe(step)
+            when :elbow
+              execute_elbow(step)
+            when :reducer
+              execute_reducer(step)
+            else
+              puts "GeometryExecutor: unknown step type #{step.type.inspect}"
+              nil
+            end
+
+          unless result
+            @model.abort_operation
+            return nil
+          end
+        end
+
+        @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
+
+        @model.commit_operation
+
+        {
+          last_port: @last_port,
+          last_piece: result
+        }
+      rescue => error
+        @model.abort_operation
+        puts "GeometryExecutor.execute failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
+      end
+
+      private
+
+      def execute_pipe(step)
+        dimensions = dimensions_for(step)
+
+        start_point =
+          if step[:deferred_start] && @last_port
+            @last_port.point
+          elsif step[:start_point]
+            point3d(step[:start_point])
+          elsif step[:source_port]
+            step[:source_port].point
+          elsif @last_port
+            @last_port.point
+          else
+            nil
+          end
+
+        end_point = point3d(step[:end_point])
+
+        return nil unless start_point && end_point
+
+        vector = start_point.vector_to(end_point)
+        return nil if vector.length == 0
+
+        vector.normalize!
+
+        source_port = step[:source_port]
+        frame_source = source_port || @last_port
+
+        preferred_width_axis = frame_source_width_axis(frame_source)
+        preferred_height_axis = frame_source_height_axis(frame_source)
+
+        group = @model.active_entities.add_group
+        group.name =
+          if dimensions[:shape] == :rectangular
+            "Rectangular Duct Pipe"
+          else
+            "Duct Pipe"
+          end
+
+        success =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularPipeBuilder.build_into(
+              group,
+              start_point,
+              end_point,
+              dimensions[:width],
+              dimensions[:height],
+              overlap_start: false,
+              overlap_end: false,
+              cap_start: false,
+              cap_end: false,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true
+            )
+          else
+            Geometry::PipeBuilder.build_into(
+              group,
+              start_point,
+              end_point,
+              dimensions[:diameter],
+              overlap_start: false,
+              overlap_end: false,
+              cap_start: false,
+              cap_end: false
+            )
+          end
+
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        basis =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularFrame.stable_basis_for_axis(
+              vector,
+              dimensions[:width],
+              dimensions[:height],
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true
+            )
+          else
+            nil
+          end
+
+        start_port = Model::Port.new(
+          point: start_point,
+          vector: vector.clone.reverse,
+          diameter: dimensions[:diameter],
+          shape: dimensions[:shape],
+          width: dimensions[:width],
+          height: dimensions[:height],
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
+        )
+
+        end_port = Model::Port.new(
+          point: end_point,
+          vector: vector.clone,
+          diameter: dimensions[:diameter],
+          shape: dimensions[:shape],
+          width: dimensions[:width],
+          height: dimensions[:height],
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
+        )
+
+        piece = Model::DuctPiece.new(
+          type: :pipe,
+          group: group,
+          ports: [start_port, end_port]
+        )
+
+        @network.add_piece(piece)
+        PieceMetadataService.save_piece(piece)
+
+        connect_source_port(source_port, start_port)
+        connect_deferred_port(start_port)
+
+        @last_port = end_port
+
+        piece
+      end
+
+      def execute_elbow(step)
+        dimensions = dimensions_for(step)
+
+        start_point =
+          if step[:start_point]
+            point3d(step[:start_point])
+          elsif step[:source_port]
+            step[:source_port].point
+          elsif @last_port
+            @last_port.point
+          else
+            nil
+          end
+
+        entry_vector = normalized(step[:entry_vector])
+        exit_vector = normalized(step[:exit_vector])
+
+        return nil unless start_point && entry_vector && exit_vector
+
+        bend_radius = step[:bend_radius].to_f
+        bend_radius = default_bend_radius(dimensions) if bend_radius <= 0.0
+
+        source_port = step[:source_port]
+        frame_source = source_port || @last_port
+
+        preferred_width_axis = frame_source_width_axis(frame_source)
+        preferred_height_axis = frame_source_height_axis(frame_source)
+
+        group = @model.active_entities.add_group
+        group.name =
+          if dimensions[:shape] == :rectangular
+            "Rectangular Duct Elbow"
+          else
+            "Duct Elbow"
+          end
+
+        success =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.build_into(
+              group,
+              start_point,
+              entry_vector,
+              exit_vector,
+              dimensions[:width],
+              dimensions[:height],
+              bend_radius,
+              cap_start: false,
+              cap_end: false,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis
+            )
+          else
+            Geometry::ElbowBuilder.build_into(
+              group,
+              start_point,
+              entry_vector,
+              exit_vector,
+              dimensions[:diameter],
+              bend_radius,
+              cap_start: false,
+              cap_end: false
+            )
+          end
+
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        end_point =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.exit_point(
+              start_point,
+              entry_vector,
+              exit_vector,
+              bend_radius
+            )
+          else
+            Geometry::ElbowBuilder.exit_point(
+              start_point,
+              entry_vector,
+              exit_vector,
+              bend_radius
+            )
+          end
+
+        unless end_point
+          group.erase! if group.valid?
+          return nil
+        end
+
+        start_basis =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularFrame.stable_basis_for_axis(
+              entry_vector,
+              dimensions[:width],
+              dimensions[:height],
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: false
+            )
+          else
+            nil
+          end
+
+        end_basis =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.exit_basis(
+              start_point: start_point,
+              entry_vector: entry_vector,
+              exit_vector: exit_vector,
+              bend_radius: bend_radius,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              width: dimensions[:width],
+              height: dimensions[:height],
+              allow_relevel: false
+            )
+          else
+            nil
+          end
+
+        start_port = Model::Port.new(
+          point: start_point,
+          vector: entry_vector.clone.reverse,
+          diameter: dimensions[:diameter],
+          shape: dimensions[:shape],
+          width: dimensions[:width],
+          height: dimensions[:height],
+          width_axis: start_basis && start_basis[:width_axis],
+          height_axis: start_basis && start_basis[:height_axis]
+        )
+
+        end_port = Model::Port.new(
+          point: end_point,
+          vector: exit_vector.clone,
+          diameter: dimensions[:diameter],
+          shape: dimensions[:shape],
+          width: dimensions[:width],
+          height: dimensions[:height],
+          width_axis: end_basis && end_basis[:width_axis],
+          height_axis: end_basis && end_basis[:height_axis]
+        )
+
+        piece = Model::DuctPiece.new(
+          type: :elbow,
+          group: group,
+          ports: [start_port, end_port]
+        )
+
+        @network.add_piece(piece)
+        PieceMetadataService.save_piece(piece)
+
+        connect_source_port(source_port, start_port)
+        connect_deferred_port(start_port)
+
+        @last_port = end_port
+
+        piece
+      end
+
+      def execute_reducer(step)
+        start_dimensions = reducer_start_dimensions_for(step)
+        end_dimensions = reducer_end_dimensions_for(step)
+
+        return nil unless start_dimensions && end_dimensions
+        return nil unless start_dimensions[:shape] == end_dimensions[:shape]
+
+        start_point =
+          if step[:deferred_start] && @last_port
+            @last_port.point
+          elsif step[:start_point]
+            point3d(step[:start_point])
+          elsif step[:source_port]
+            step[:source_port].point
+          elsif @last_port
+            @last_port.point
+          else
+            nil
+          end
+
+        end_point = point3d(step[:end_point])
+
+        return nil unless start_point && end_point
+
+        vector = start_point.vector_to(end_point)
+        return nil if vector.length == 0
+
+        vector.normalize!
+
+        source_port = step[:source_port]
+        frame_source = source_port || @last_port
+
+        preferred_width_axis =
+          step[:preferred_width_axis] || frame_source_width_axis(frame_source)
+
+        preferred_height_axis =
+          step[:preferred_height_axis] || frame_source_height_axis(frame_source)
+
+        group = @model.active_entities.add_group
+        group.name =
+          if start_dimensions[:shape] == :rectangular
+            "Rectangular Duct Increaser / Reducer"
+          else
+            "Duct Increaser / Reducer"
+          end
+
+        success = Geometry::ReducerBuilder.build_into(
+          group,
+          start_point,
+          end_point,
+          start_dimensions: start_dimensions,
+          end_dimensions: end_dimensions,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis
+        )
+
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        basis =
+          if start_dimensions[:shape] == :rectangular
+            Geometry::RectangularFrame.basis_for_axis(
+              vector,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis
+            )
+          else
+            nil
+          end
+
+        start_port = Model::Port.new(
+          point: start_point,
+          vector: vector.clone.reverse,
+          diameter: start_dimensions[:diameter],
+          shape: start_dimensions[:shape],
+          width: start_dimensions[:width],
+          height: start_dimensions[:height],
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
+        )
+
+        end_port = Model::Port.new(
+          point: end_point,
+          vector: vector.clone,
+          diameter: end_dimensions[:diameter],
+          shape: end_dimensions[:shape],
+          width: end_dimensions[:width],
+          height: end_dimensions[:height],
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
+        )
+
+        piece = Model::DuctPiece.new(
+          type: :reducer,
+          group: group,
+          ports: [start_port, end_port]
+        )
+
+        @network.add_piece(piece)
+        PieceMetadataService.save_piece(piece)
+
+        connect_source_port(source_port, start_port)
+        connect_deferred_port(start_port)
+
+        @last_port = end_port
+
+        piece
+      rescue => error
+        puts "GeometryExecutor.execute_reducer failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
+      end
+
+      def connect_source_port(source_port, new_start_port)
+        return unless source_port
+        return unless new_start_port
+
+        @network.connect_ports(source_port, new_start_port)
+      end
+
+      def connect_deferred_port(new_start_port)
+        return unless @last_port
+        return unless new_start_port
+        return if @last_port == new_start_port
+
+        if @last_port.point.distance(new_start_port.point) <= Model::Network::CONNECTION_DISTANCE * 4.0
+          @network.connect_ports(@last_port, new_start_port)
+        end
+      end
+
+      def dimensions_for(step)
+        Model::Port.dimensions_from_params(step.params)
+      end
+
+      def reducer_start_dimensions_for(step)
+        params =
+          if step[:start_dimensions]
+            step[:start_dimensions]
+          else
+            step.params
+          end
+
+        Model::Port.dimensions_from_params(params || {})
+      rescue
+        nil
+      end
+
+      def reducer_end_dimensions_for(step)
+        params =
+          if step[:end_dimensions]
+            step[:end_dimensions]
+          else
+            step.params
+          end
+
+        Model::Port.dimensions_from_params(params || {})
+      rescue
+        nil
+      end
+
+      def default_bend_radius(dimensions)
+        largest = [
+          dimensions[:diameter].to_f,
+          dimensions[:width].to_f,
+          dimensions[:height].to_f
+        ].max
+
+        largest * DEFAULT_BEND_RADIUS_FACTOR
+      end
+
+      def point3d(value)
+        return value if value.is_a?(Geom::Point3d)
+
+        if value.respond_to?(:to_a)
+          Geom::Point3d.new(value.to_a)
+        else
+          nil
+        end
+      rescue
+        nil
+      end
+
+      def normalized(value)
+        Geometry::VectorMath.normalized(value)
+      end
+
+      def frame_source_width_axis(frame_source)
+        if frame_source && frame_source.respond_to?(:width_axis)
+          frame_source.width_axis
+        else
+          nil
+        end
+      rescue
+        nil
+      end
+
+      def frame_source_height_axis(frame_source)
+        if frame_source && frame_source.respond_to?(:height_axis)
+          frame_source.height_axis
+        else
+          nil
+        end
+      rescue
+        nil
+      end
+    end
+  end
+end
