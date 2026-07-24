@@ -35,13 +35,20 @@ module DuctExtension
         center = nil
 
         if dimensions[:shape] == :rectangular
-          main_basis = Geometry::RectangularFrame.basis_for_axis(branch_axis)
+          stem_into_tee = stem_out.clone.reverse
+
+          # Preserve the incoming rectangular roll. The crossbar runs along the
+          # stem port's width axis, so the crossbar's width direction should be
+          # the stem axis and its height should stay aligned with the old port.
+          main_basis = Geometry::RectangularFrame.basis_for_axis(
+            branch_axis,
+            preferred_width_axis: stem_into_tee,
+            preferred_height_axis: stem_port.height_axis
+          )
           return nil unless main_basis
 
           main_width_axis = main_basis[:width_axis]
           main_height_axis = main_basis[:height_axis]
-
-          stem_into_tee = stem_out.clone.reverse
 
           face_offset = EndFittingSupport.rectangular_face_offset_for_direction(
             direction: stem_into_tee,
@@ -66,7 +73,11 @@ module DuctExtension
 
         stem_into_tee = stem_out.clone.reverse
 
-        model.start_operation("Insert End Tee", true)
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert End Tee"
+        ) do |operation|
 
         group = model.active_entities.add_group
         group.name =
@@ -102,29 +113,34 @@ module DuctExtension
 
         unless success
           group.erase! if group.valid?
-          model.abort_operation
-          return nil
+          operation.abort!(nil)
         end
 
         left_basis =
           if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.basis_for_axis(branch_axis.clone.reverse)
-          else
-            nil
+            Geometry::RectangularFrame.basis_for_axis(
+              branch_axis.clone.reverse,
+              preferred_width_axis: main_width_axis,
+              preferred_height_axis: main_height_axis
+            )
           end
 
         right_basis =
           if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.basis_for_axis(branch_axis)
-          else
-            nil
+            Geometry::RectangularFrame.basis_for_axis(
+              branch_axis,
+              preferred_width_axis: main_width_axis,
+              preferred_height_axis: main_height_axis
+            )
           end
 
         stem_basis =
           if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.basis_for_axis(stem_into_tee)
-          else
-            nil
+            Geometry::RectangularFrame.basis_for_axis(
+              stem_into_tee,
+              preferred_width_axis: stem_port.width_axis,
+              preferred_height_axis: stem_port.height_axis
+            )
           end
 
         left_port = Model::Port.new(
@@ -176,8 +192,6 @@ module DuctExtension
           outlet_ports: [left_port, right_port]
         )
 
-        model.commit_operation
-
         {
           tee_piece: tee_piece,
 
@@ -191,8 +205,8 @@ module DuctExtension
           main_end_port: right_port,
           branch_port: left_port
         }
+        end
       rescue => error
-        model.abort_operation if model
         puts "EndTeeInsertService.insert_at_port failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

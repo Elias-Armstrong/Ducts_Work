@@ -49,7 +49,11 @@ module DuctExtension
 
         stem_into_wye = forward_vector.clone.reverse
 
-        model.start_operation("Insert End Wye", true)
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert End Wye"
+        ) do |operation|
 
         group = model.active_entities.add_group
         group.name =
@@ -78,8 +82,7 @@ module DuctExtension
 
         unless success
           group.erase! if group.valid?
-          model.abort_operation
-          return nil
+          operation.abort!(nil)
         end
 
         branch_width_axis =
@@ -170,8 +173,6 @@ module DuctExtension
           outlet_ports: [forward_port, branch_port]
         )
 
-        model.commit_operation
-
         {
           wye_piece: wye_piece,
           tee_piece: wye_piece,
@@ -181,8 +182,8 @@ module DuctExtension
           main_start_port: forward_port,
           main_end_port: branch_port
         }
+        end
       rescue => error
-        model.abort_operation if model
         puts "EndWyeInsertService.insert_at_port failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

@@ -1,9 +1,8 @@
 module DuctExtension
   module Geometry
     module PrimitiveHelpers
-      # Return rectangle corners in the same winding order used by the existing
-      # fitting builders. Axes are intentionally not reoriented here; callers
-      # remain responsible for choosing their fitting frame.
+      # Return rectangle corners in the winding order used by the fitting
+      # builders. Callers remain responsible for choosing the fitting frame.
       def self.rectangle_corners(
         center:,
         width_axis:,
@@ -28,6 +27,26 @@ module DuctExtension
         ]
       rescue
         []
+      end
+
+      def self.midpoint(point_a, point_b)
+        return nil unless point_a && point_b
+
+        Geom::Point3d.new(
+          (point_a.x.to_f + point_b.x.to_f) / 2.0,
+          (point_a.y.to_f + point_b.y.to_f) / 2.0,
+          (point_a.z.to_f + point_b.z.to_f) / 2.0
+        )
+      rescue
+        nil
+      end
+
+      def self.edge_midpoint(edge)
+        return nil unless edge && edge.respond_to?(:start) && edge.respond_to?(:end)
+
+        midpoint(edge.start.position, edge.end.position)
+      rescue
+        nil
       end
 
       # Add an explicitly visible, non-soft, non-smooth edge. Different callers

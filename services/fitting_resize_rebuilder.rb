@@ -1,42 +1,26 @@
 module DuctExtension
   module Services
-    class SelectionResizeService
-      if const_defined?(:SUPPORTED_TYPES, false)
-        remove_const(:SUPPORTED_TYPES)
-      end
+    class FittingResizeRebuilder
+      extend FittingRebuildSupport
 
-      SUPPORTED_TYPES = [
-        :pipe,
-        :elbow,
-        :reducer,
-        :tee,
-        :wye,
-        :cross
-      ].freeze
+      EPSILON = FittingRebuildSupport::EPSILON
 
-      class << self
-        alias_method :resize_original_rebuild_selected_piece_without_fittings!, :rebuild_selected_piece! unless method_defined?(:resize_original_rebuild_selected_piece_without_fittings!)
-      end
-
-      def self.rebuild_selected_piece!(piece:, target_dimensions:)
+      def self.rebuild(piece:, dimensions:)
         return false unless piece
         return false unless piece.group && piece.group.valid?
 
         case piece.type.to_sym
         when :tee
-          rebuild_tee_fitting!(piece, target_dimensions)
+          rebuild_tee_fitting!(piece, dimensions)
         when :wye
-          rebuild_wye_fitting!(piece, target_dimensions)
+          rebuild_wye_fitting!(piece, dimensions)
         when :cross
-          rebuild_cross_fitting!(piece, target_dimensions)
+          rebuild_cross_fitting!(piece, dimensions)
         else
-          resize_original_rebuild_selected_piece_without_fittings!(
-            piece: piece,
-            target_dimensions: target_dimensions
-          )
+          false
         end
       rescue => error
-        puts "SelectionResizeService fitting patch rebuild failed for #{piece&.type}: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild failed for #{piece&.type}: #{error.message}"
         puts error.backtrace.join("\n")
         false
       end
@@ -68,15 +52,7 @@ module DuctExtension
 
         erase_group_geometry(piece.group)
 
-        geometry_method =
-          if dimensions[:shape] == :rectangular
-            fitting_type == :wye ? :rebuild_rectangular_wye_geometry : :rebuild_rectangular_tee_geometry
-          else
-            fitting_type == :wye ? :rebuild_round_wye_geometry : :rebuild_round_tee_geometry
-          end
-
-        success = send(
-          geometry_method,
+        shared_args = {
           group: piece.group,
           center: center,
           main_a: main_a,
@@ -85,7 +61,17 @@ module DuctExtension
           main_axis: main_axis,
           branch_axis: branch_axis,
           dimensions: dimensions
-        )
+        }
+
+        success =
+          if dimensions[:shape] == :rectangular
+            rebuild_rectangular_three_way_geometry(
+              **shared_args,
+              wye_style: fitting_type == :wye
+            )
+          else
+            rebuild_round_three_way_geometry(**shared_args)
+          end
 
         return false unless success
 
@@ -97,7 +83,7 @@ module DuctExtension
 
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_three_way_fitting! failed for #{fitting_type}: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_three_way_fitting! failed for #{fitting_type}: #{error.message}"
         puts error.backtrace.join("\n")
         false
       end
@@ -157,26 +143,13 @@ module DuctExtension
 
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_cross_fitting! failed: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_cross_fitting! failed: #{error.message}"
         puts error.backtrace.join("\n")
         false
       end
 
       def self.rebuild_wye_fitting!(piece, dimensions)
         rebuild_three_way_fitting!(piece, dimensions, fitting_type: :wye)
-      end
-
-      def self.rebuild_round_tee_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:)
-        rebuild_round_three_way_geometry(
-          group: group,
-          center: center,
-          main_a: main_a,
-          main_b: main_b,
-          branch_port: branch_port,
-          main_axis: main_axis,
-          branch_axis: branch_axis,
-          dimensions: dimensions
-        )
       end
 
       def self.rebuild_round_three_way_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:)
@@ -213,21 +186,8 @@ module DuctExtension
         Geometry::Mesh.apply_material_from_group(group)
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_round_three_way_geometry failed: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_round_three_way_geometry failed: #{error.message}"
         false
-      end
-
-      def self.rebuild_round_wye_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:)
-        rebuild_round_three_way_geometry(
-          group: group,
-          center: center,
-          main_a: main_a,
-          main_b: main_b,
-          branch_port: branch_port,
-          main_axis: main_axis,
-          branch_axis: branch_axis,
-          dimensions: dimensions
-        )
       end
 
       def self.rebuild_round_cross_geometry(group:, center:, pair_a:, pair_b:, axis_a:, axis_b:, dimensions:)
@@ -265,22 +225,8 @@ module DuctExtension
 
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_round_cross_geometry failed: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_round_cross_geometry failed: #{error.message}"
         false
-      end
-
-      def self.rebuild_rectangular_tee_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:)
-        rebuild_rectangular_three_way_geometry(
-          group: group,
-          center: center,
-          main_a: main_a,
-          main_b: main_b,
-          branch_port: branch_port,
-          main_axis: main_axis,
-          branch_axis: branch_axis,
-          dimensions: dimensions,
-          wye_style: false
-        )
       end
 
       def self.rebuild_rectangular_three_way_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:, wye_style:)
@@ -327,22 +273,8 @@ module DuctExtension
         Geometry::Mesh.apply_material_from_group(group)
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_rectangular_three_way_geometry failed: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_rectangular_three_way_geometry failed: #{error.message}"
         false
-      end
-
-      def self.rebuild_rectangular_wye_geometry(group:, center:, main_a:, main_b:, branch_port:, main_axis:, branch_axis:, dimensions:)
-        rebuild_rectangular_three_way_geometry(
-          group: group,
-          center: center,
-          main_a: main_a,
-          main_b: main_b,
-          branch_port: branch_port,
-          main_axis: main_axis,
-          branch_axis: branch_axis,
-          dimensions: dimensions,
-          wye_style: true
-        )
       end
 
       def self.rebuild_rectangular_cross_geometry(group:, center:, pair_a:, pair_b:, axis_a:, axis_b:, dimensions:)
@@ -390,7 +322,7 @@ module DuctExtension
 
         true
       rescue => error
-        puts "SelectionResizeService.rebuild_rectangular_cross_geometry failed: #{error.message}"
+        puts "FittingResizeRebuilder.rebuild_rectangular_cross_geometry failed: #{error.message}"
         false
       end
 
@@ -495,7 +427,7 @@ module DuctExtension
 
         Geometry::Mesh.soft_smooth_round_edges(group) if Geometry::Mesh.respond_to?(:soft_smooth_round_edges)
       rescue => error
-        puts "SelectionResizeService.add_round_ball_hub failed: #{error.message}"
+        puts "FittingResizeRebuilder.add_round_ball_hub failed: #{error.message}"
       end
 
       def self.add_rectangular_center_box(group:, center:, axis_a:, axis_b:, dimensions:, basis_a:, basis_b:, wye_style:)
@@ -556,165 +488,10 @@ module DuctExtension
 
         true
       rescue => error
-        puts "SelectionResizeService.add_rectangular_center_box failed: #{error.message}"
+        puts "FittingResizeRebuilder.add_rectangular_center_box failed: #{error.message}"
         false
       end
 
-      def self.tee_port_layout(ports)
-        pair = most_opposite_pair(ports)
-        return nil unless pair
-
-        branch = ports.find { |port| port != pair[0] && port != pair[1] }
-        [pair[0], pair[1], branch]
-      rescue
-        [nil, nil, nil]
-      end
-
-      def self.cross_port_layout(ports)
-        first_pair = most_opposite_pair(ports)
-        return nil unless first_pair
-
-        remaining = ports.reject { |port| port == first_pair[0] || port == first_pair[1] }
-        return nil unless remaining.length >= 2
-
-        second_pair = most_opposite_pair(remaining)
-        second_pair ||= [remaining[0], remaining[1]]
-
-        [first_pair, second_pair]
-      rescue
-        [nil, nil]
-      end
-
-      def self.most_opposite_pair(ports)
-        pairs = []
-
-        ports.combination(2) do |a, b|
-          next unless a && b
-          next unless a.outward_vector && b.outward_vector
-
-          va = a.outward_vector.clone
-          vb = b.outward_vector.clone
-
-          next if va.length <= EPSILON
-          next if vb.length <= EPSILON
-
-          va.normalize!
-          vb.normalize!
-
-          dot = va.dot(vb)
-
-          distance =
-            if a.point && b.point
-              a.point.distance(b.point)
-            else
-              0.0
-            end
-
-          pairs << {
-            pair: [a, b],
-            score: (-dot * 1000.0) + distance
-          }
-        end
-
-        item = pairs.max_by { |entry| entry[:score] }
-        item && item[:pair]
-      rescue
-        nil
-      end
-
-      def self.update_fitting_port_dimensions!(ports:, center:, dimensions:)
-        Array(ports).each do |port|
-          next unless port && port.point
-
-          direction = center.vector_to(port.point)
-
-          if direction.length <= EPSILON && port.outward_vector
-            direction = port.outward_vector.clone
-          end
-
-          next if direction.length <= EPSILON
-          direction.normalize!
-
-          update_port_dimensions!(
-            port,
-            dimensions,
-            direction: direction,
-            preferred_width_axis: port.width_axis,
-            preferred_height_axis: port.height_axis
-          )
-        end
-      rescue => error
-        puts "SelectionResizeService.update_fitting_port_dimensions! failed: #{error.message}"
-      end
-
-      def self.fitting_rectangular_basis_for_axis(axis, dimensions, port_a = nil, port_b = nil)
-        preferred_width_axis =
-          if port_a && port_a.width_axis
-            port_a.width_axis
-          elsif port_b && port_b.width_axis
-            port_b.width_axis
-          else
-            nil
-          end
-
-        preferred_height_axis =
-          if port_a && port_a.height_axis
-            port_a.height_axis
-          elsif port_b && port_b.height_axis
-            port_b.height_axis
-          else
-            nil
-          end
-
-        if Geometry::RectangularFrame.respond_to?(:stable_basis_for_axis)
-          Geometry::RectangularFrame.stable_basis_for_axis(
-            axis,
-            dimensions[:width],
-            dimensions[:height],
-            preferred_width_axis: preferred_width_axis,
-            preferred_height_axis: preferred_height_axis,
-            allow_relevel: false
-          )
-        else
-          Geometry::RectangularFrame.basis_for_axis(
-            axis,
-            preferred_width_axis: preferred_width_axis,
-            preferred_height_axis: preferred_height_axis
-          )
-        end
-      rescue
-        Geometry::RectangularFrame.basis_for_axis(axis)
-      end
-
-      def self.average_point(points)
-        points = Array(points).compact
-        return nil if points.empty?
-
-        Geom::Point3d.new(
-          points.map(&:x).sum / points.length.to_f,
-          points.map(&:y).sum / points.length.to_f,
-          points.map(&:z).sum / points.length.to_f
-        )
-      rescue
-        nil
-      end
-
-      def self.box_point(center, axis_a, axis_b, axis_c, amount_a, amount_b, amount_c)
-        Geom::Point3d.new(
-          center.x + axis_a.x * amount_a + axis_b.x * amount_b + axis_c.x * amount_c,
-          center.y + axis_a.y * amount_a + axis_b.y * amount_b + axis_c.y * amount_c,
-          center.z + axis_a.z * amount_a + axis_b.z * amount_b + axis_c.z * amount_c
-        )
-      end
-
-      def self.add_visible_edge(entities, point_a, point_b)
-        Geometry::PrimitiveHelpers.add_visible_edge(
-          entities,
-          point_a,
-          point_b,
-          min_distance: EPSILON
-        )
-      end
     end
   end
 end

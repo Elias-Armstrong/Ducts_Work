@@ -1,52 +1,35 @@
 module DuctExtension
   module Model
+    # Compatibility façade for older callers. New code should prefer
+    # DuctDimensions directly so dimension normalization has one owner.
     module DimensionUtils
       def self.positive_number(value, fallback)
-        number = value.to_f
-        number > 0.0 ? number : fallback.to_f
-      rescue
-        fallback.to_f
+        DuctDimensions.positive_number(value, fallback)
       end
 
       def self.normalize_shape(value, default: :rectangular)
-        text = value.to_s.downcase.strip
-        return :round if text == "round"
-        return :rectangular if text == "rectangular"
-
-        default
-      rescue
-        default
+        DuctDimensions.normalize_shape(value, default: default)
       end
 
       def self.largest(dimensions)
-        return 0.0 unless dimensions
-
-        [
-          dimensions[:diameter].to_f,
-          dimensions[:width].to_f,
-          dimensions[:height].to_f
-        ].max
+        DuctDimensions.coerce(dimensions).largest
+      rescue
+        0.0
       end
 
       def self.max_dimensions(main_dimensions, branch_dimensions)
-        main_dimensions ||= {}
-        branch_dimensions ||= {}
+        main_dimensions = DuctDimensions.coerce(main_dimensions)
+        branch_dimensions = DuctDimensions.coerce(branch_dimensions)
 
-        if main_dimensions[:shape] == :rectangular || branch_dimensions[:shape] == :rectangular
-          {
-            shape: :rectangular,
-            diameter: [main_dimensions[:diameter].to_f, branch_dimensions[:diameter].to_f].max,
-            width: [main_dimensions[:width].to_f, branch_dimensions[:width].to_f].max,
-            height: [main_dimensions[:height].to_f, branch_dimensions[:height].to_f].max
-          }
+        if main_dimensions.rectangular? || branch_dimensions.rectangular?
+          DuctDimensions.rectangular(
+            width: [main_dimensions.width, branch_dimensions.width].max,
+            height: [main_dimensions.height, branch_dimensions.height].max
+          )
         else
-          diameter = [main_dimensions[:diameter].to_f, branch_dimensions[:diameter].to_f].max
-          {
-            shape: :round,
-            diameter: diameter,
-            width: diameter,
-            height: diameter
-          }
+          DuctDimensions.round(
+            diameter: [main_dimensions.diameter, branch_dimensions.diameter].max
+          )
         end
       end
     end

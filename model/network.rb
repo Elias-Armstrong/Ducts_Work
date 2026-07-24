@@ -22,6 +22,22 @@ module DuctExtension
         @spatial_index.clear
       end
 
+      # Replace this network's contents while preserving the Network object
+      # identity held by active tools/services. Used after an aborted SketchUp
+      # operation to resynchronize Ruby topology with the rolled-back model.
+      def replace_from!(other)
+        clear
+        return self unless other
+
+        Array(other.pieces).each { |piece| add_piece(piece) }
+        Array(other.connections).each do |connection|
+          connect_ports(connection.port_a, connection.port_b) if connection
+        end
+
+        rebuild_index!
+        self
+      end
+
       def add_piece(piece)
         return unless piece
         return if @pieces.include?(piece)
@@ -81,6 +97,13 @@ module DuctExtension
 
       def disconnect_port(port)
         @connections.delete_if { |connection| connection.includes?(port) }
+      end
+
+      def disconnect_ports(port_a, port_b)
+        @connections.delete_if do |connection|
+          (connection.port_a == port_a && connection.port_b == port_b) ||
+            (connection.port_a == port_b && connection.port_b == port_a)
+        end
       end
 
       def connected?(port_a, port_b)
@@ -177,12 +200,3 @@ module DuctExtension
   end
 end
 
-module DuctExtension
-  module Model
-    class Connection
-      def includes_any?(ports)
-        Array(ports).any? { |port| includes?(port) }
-      end
-    end
-  end
-end

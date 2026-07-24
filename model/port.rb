@@ -9,14 +9,13 @@ module DuctExtension
       attr_accessor :height
       attr_accessor :piece
 
-      # Rectangular frame orientation.
-      # Round ducts ignore these.
+      # Rectangular frame orientation. Round ducts ignore these.
       attr_accessor :width_axis
       attr_accessor :height_axis
 
-      DEFAULT_DIAMETER = 8.0
-      DEFAULT_WIDTH = 12.0
-      DEFAULT_HEIGHT = 8.0
+      DEFAULT_DIAMETER = DuctDimensions::DEFAULT_DIAMETER
+      DEFAULT_WIDTH = DuctDimensions::DEFAULT_WIDTH
+      DEFAULT_HEIGHT = DuctDimensions::DEFAULT_HEIGHT
 
       def initialize(
         point:,
@@ -30,24 +29,34 @@ module DuctExtension
         height_axis: nil
       )
         @point = to_point3d(point)
-        @vector = normalized_vector(vector) || Geom::Vector3d.new(1, 0, 0)
-
-        @shape = normalize_shape(shape)
-
-        @diameter = positive_number(diameter, DEFAULT_DIAMETER)
-
-        if @shape == :rectangular
-          @width = positive_number(width, @diameter)
-          @height = positive_number(height, @diameter)
-        else
-          @width = @diameter
-          @height = @diameter
-        end
-
+        @vector = Geometry::VectorMath.normalized(vector) || Geom::Vector3d.new(1, 0, 0)
+        self.dimensions = DuctDimensions.new(
+          shape: shape,
+          diameter: diameter,
+          width: width,
+          height: height
+        )
         @piece = piece
+        @width_axis = Geometry::VectorMath.normalized(width_axis)
+        @height_axis = Geometry::VectorMath.normalized(height_axis)
+      end
 
-        @width_axis = normalized_vector(width_axis)
-        @height_axis = normalized_vector(height_axis)
+      def dimensions
+        DuctDimensions.new(
+          shape: @shape,
+          diameter: @diameter,
+          width: @width,
+          height: @height
+        )
+      end
+
+      def dimensions=(value)
+        normalized = DuctDimensions.coerce(value, fallback: dimensions_if_available)
+        @shape = normalized.shape
+        @diameter = normalized.diameter
+        @width = normalized.width
+        @height = normalized.height
+        normalized
       end
 
       def outward_vector
@@ -55,7 +64,7 @@ module DuctExtension
       end
 
       def outward_vector=(value)
-        @vector = normalized_vector(value) || @vector
+        @vector = Geometry::VectorMath.normalized(value) || @vector
       end
 
       def round?
@@ -67,19 +76,9 @@ module DuctExtension
       end
 
       def same_location?(other, tolerance = 0.05)
-        return false unless other
-        return false unless other.respond_to?(:point)
+        return false unless other && other.respond_to?(:point)
 
         @point.distance(other.point) <= tolerance
-      end
-
-      def dimensions
-        {
-          shape: @shape,
-          diameter: @diameter,
-          width: @width,
-          height: @height
-        }
       end
 
       def to_h
@@ -111,89 +110,35 @@ module DuctExtension
       end
 
       def self.dimensions_from_params(params = {}, fallback_port = nil)
-        params ||= {}
-
-        fallback_shape =
-          if fallback_port && fallback_port.respond_to?(:shape)
-            fallback_port.shape
+        fallback =
+          if fallback_port && fallback_port.respond_to?(:dimensions)
+            fallback_port.dimensions
           else
-            :round
+            nil
           end
 
-        shape = normalize_shape_value(params[:shape] || params["shape"] || fallback_shape)
-
-        fallback_diameter =
-          if fallback_port && fallback_port.respond_to?(:diameter)
-            fallback_port.diameter
-          else
-            DEFAULT_DIAMETER
-          end
-
-        diameter = positive_number_value(
-          params[:diameter] || params["diameter"],
-          fallback_diameter
-        )
-
-        if shape == :rectangular
-          fallback_width =
-            if fallback_port && fallback_port.respond_to?(:width)
-              fallback_port.width
-            else
-              DEFAULT_WIDTH
-            end
-
-          fallback_height =
-            if fallback_port && fallback_port.respond_to?(:height)
-              fallback_port.height
-            else
-              DEFAULT_HEIGHT
-            end
-
-          width = positive_number_value(params[:width] || params["width"], fallback_width)
-          height = positive_number_value(params[:height] || params["height"], fallback_height)
-
-          {
-            shape: :rectangular,
-            diameter: [width, height].max,
-            width: width,
-            height: height
-          }
-        else
-          {
-            shape: :round,
-            diameter: diameter,
-            width: diameter,
-            height: diameter
-          }
-        end
+        DuctDimensions.coerce(params || {}, fallback: fallback)
       end
 
       def self.normalize_shape_value(value)
-        text = value.to_s.downcase.strip
-
-        case text
-        when "rectangular", "rectangle", "rect", "square"
-          :rectangular
-        else
-          :round
-        end
+        DuctDimensions.normalize_shape(value, default: :round)
       end
 
       def self.positive_number_value(value, fallback)
-        number = value.to_f
-        number > 0 ? number : fallback.to_f
-      rescue
-        fallback.to_f
+        DuctDimensions.positive_number(value, fallback)
       end
 
       private
 
-      def normalize_shape(value)
-        self.class.normalize_shape_value(value)
-      end
+      def dimensions_if_available
+        return nil unless defined?(@shape) && @shape
 
-      def positive_number(value, fallback)
-        self.class.positive_number_value(value, fallback)
+        {
+          shape: @shape,
+          diameter: @diameter,
+          width: @width,
+          height: @height
+        }
       end
 
       def to_point3d(value)
@@ -204,28 +149,8 @@ module DuctExtension
         else
           Geom::Point3d.new(0, 0, 0)
         end
-      end
-
-      def normalized_vector(value)
-        return nil unless value
-
-        vector =
-          if value.is_a?(Geom::Vector3d)
-            value.clone
-          elsif value.respond_to?(:to_a)
-            array = value.to_a
-            Geom::Vector3d.new(array[0].to_f, array[1].to_f, array[2].to_f)
-          else
-            nil
-          end
-
-        return nil unless vector
-        return nil if vector.length == 0
-
-        vector.normalize!
-        vector
       rescue
-        nil
+        Geom::Point3d.new(0, 0, 0)
       end
     end
   end

@@ -6,20 +6,19 @@ module DuctExtension
       def self.clear_model_data(model, network = nil)
         return false unless model
 
-        model.start_operation("Clear Duct Data", true)
+        target_network = network || ::DuctExtension.network_for_model(model)
 
-        clear_entities(model.entities)
-
-        if network
-          network.clear
-        else
-          ::DuctExtension.network_for_model(model).clear
+        ModelOperation.run(
+          model: model,
+          network: target_network,
+          name: "Clear Duct Data",
+          rebuild_on_failure: true
+        ) do
+          clear_entities(model.entities)
+          target_network.clear
+          true
         end
-
-        model.commit_operation
-        true
       rescue => error
-        model.abort_operation if model
         puts "NetworkClearService.clear_model_data failed: #{error.message}"
         puts error.backtrace.join("\n")
         false

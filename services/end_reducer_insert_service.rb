@@ -51,7 +51,11 @@ module DuctExtension
         start_point = stem_port.point
         end_point = start_point.offset(direction, transition_length)
 
-        model.start_operation("Insert Increaser / Reducer", true)
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert Increaser / Reducer"
+        ) do |operation|
 
         group = model.active_entities.add_group
         group.name =
@@ -73,8 +77,7 @@ module DuctExtension
 
         unless success
           group.erase! if group.valid?
-          model.abort_operation
-          return nil
+          operation.abort!(nil)
         end
 
         start_basis =
@@ -136,8 +139,6 @@ module DuctExtension
 
         network.rebuild_index! if network.respond_to?(:rebuild_index!)
 
-        model.commit_operation
-
         {
           piece: piece,
           old_port: reducer_start_port,
@@ -145,8 +146,8 @@ module DuctExtension
           start_dimensions: start_dimensions,
           end_dimensions: end_dimensions
         }
+        end
       rescue => error
-        model.abort_operation if model
         puts "EndReducerInsertService.insert_at_port failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

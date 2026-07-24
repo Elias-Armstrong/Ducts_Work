@@ -12,15 +12,28 @@ module DuctExtension
   end
 
   @model_networks ||= {}
+  @network_validation_enabled = false if @network_validation_enabled.nil?
+
+  def self.network_validation_enabled?
+    !!@network_validation_enabled
+  end
+
+  def self.network_validation_enabled=(value)
+    @network_validation_enabled = !!value
+  end
 
   def self.network_for_model(model)
     @model_networks[model.guid] ||= Model::Network.new
   end
 end
 
+# ===== SHARED FOUNDATIONS =====
+require_relative 'geometry/vector_math'
+
 # ===== MODEL =====
-require_relative 'model/port'
+require_relative 'model/duct_dimensions'
 require_relative 'model/dimension_utils'
+require_relative 'model/port'
 require_relative 'model/build_step'
 require_relative 'model/duct_piece'
 require_relative 'model/connection'
@@ -28,7 +41,6 @@ require_relative 'model/network'
 require_relative 'model/spatial_port_index'
 
 # ===== GEOMETRY =====
-require_relative 'geometry/vector_math'
 require_relative 'geometry/primitive_helpers'
 require_relative 'geometry/mesh'
 require_relative 'geometry/pipe_builder'
@@ -46,29 +58,52 @@ require_relative 'geometry/vent_builder'
 # ===== SERVICES =====
 require_relative 'services/piece_metadata_service'
 require_relative 'services/network_rebuild_service'
+require_relative 'services/network_validator'
+require_relative 'services/model_operation'
 require_relative 'services/network_clear_service'
 require_relative 'services/geometry_cleanup_service'
 require_relative 'services/visual_style_service'
 require_relative 'services/snap_service'
+require_relative 'services/fitting_rebuild_support'
+require_relative 'services/fitting_resize_rebuilder'
+require_relative 'services/rectangular_fitting_swing_rebuilder'
+require_relative 'services/fitting_rebuild_service'
 require_relative 'services/connector_swing_service'
+require_relative 'services/selection_resize_planner'
+require_relative 'services/selection_resize_layout_service'
+require_relative 'services/selection_piece_resize_service'
 require_relative 'services/selection_resize_service'
-require_relative 'services/selection_resize_fittings_patch'
 require_relative 'services/route_planner'
 require_relative 'services/geometry_executor'
 require_relative 'services/tee_insert_service'
 require_relative 'services/end_fitting_support'
+require_relative 'services/tee_placement_calculator'
 require_relative 'services/pipe_connection_service'
 require_relative 'services/end_tee_insert_service'
 require_relative 'services/end_cross_insert_service'
 require_relative 'services/end_wye_insert_service'
 require_relative 'services/end_reducer_insert_service'
 require_relative 'services/vent_insert_service'
+require_relative 'services/routing/route_context'
+require_relative 'services/routing/route_math'
+require_relative 'services/routing/strategies/direct_strategy'
+require_relative 'services/routing/strategies/two_terminal_elbow_strategy'
+require_relative 'services/routing/strategies/one_elbow_strategy'
+require_relative 'services/routing/strategies/dogleg_strategy'
+require_relative 'services/routing/strategy_pipeline'
 require_relative 'services/port_to_port_route_service'
 require_relative 'services/rectangular_endpoint_relief_service'
 
 # ===== TOOL =====
+require_relative 'tool/reducer_prompt'
+require_relative 'tool/duct_tool_menu'
+require_relative 'tool/duct_tool_typed_length'
+require_relative 'tool/duct_tool_vents'
+require_relative 'tool/duct_tool_fittings'
+require_relative 'tool/duct_tool_navigation'
+require_relative 'tool/duct_tool_routing_preview'
+require_relative 'tool/duct_tool_settings'
 require_relative 'tool/duct_tool'
-require_relative 'tool/duct_tool_vent_patch'
 require_relative 'tool/reducer_tool'
 
 # ===== UI =====

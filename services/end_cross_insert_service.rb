@@ -44,7 +44,11 @@ module DuctExtension
 
         stem_into_cross = forward_vector.clone.reverse
 
-        model.start_operation("Insert End Cross", true)
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert End Cross"
+        ) do |operation|
 
         group = model.active_entities.add_group
         group.name =
@@ -72,8 +76,7 @@ module DuctExtension
 
         unless success
           group.erase! if group.valid?
-          model.abort_operation
-          return nil
+          operation.abort!(nil)
         end
 
         stem_basis = EndFittingSupport.port_basis_for_direction(
@@ -162,8 +165,6 @@ module DuctExtension
           outlet_ports: [left_port, right_port, forward_port]
         )
 
-        model.commit_operation
-
         {
           cross_piece: cross_piece,
           tee_piece: cross_piece,
@@ -175,8 +176,8 @@ module DuctExtension
           main_end_port: right_port,
           branch_port: forward_port
         }
+        end
       rescue => error
-        model.abort_operation if model
         puts "EndCrossInsertService.insert_at_port failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

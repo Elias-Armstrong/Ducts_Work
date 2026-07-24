@@ -3,28 +3,26 @@ module DuctExtension
     module NetworkRebuildService
       DICTIONARY = "DuctExtension"
 
-      def self.rebuild(model)
-        network = Model::Network.new
+      def self.rebuild(model, target_network: nil)
+        rebuilt = Model::Network.new
 
-        groups = collect_groups(model.entities)
-
-        groups.each do |group|
+        collect_groups(model.entities).each do |group|
           piece = PieceMetadataService.load_piece(group)
-          next unless piece
-
-          network.add_piece(piece)
+          rebuilt.add_piece(piece) if piece
         end
 
-        reconnect_touching_ports(network)
+        reconnect_touching_ports(rebuilt)
+
+        network = target_network || rebuilt
+        network.replace_from!(rebuilt) if target_network
 
         ::DuctExtension.instance_variable_get(:@model_networks)[model.guid] = network
-
         network
       rescue => error
         puts "NetworkRebuildService.rebuild failed: #{error.message}"
         puts error.backtrace.join("\n")
 
-        ::DuctExtension.network_for_model(model)
+        target_network || ::DuctExtension.network_for_model(model)
       end
 
       def self.collect_groups(entities, results = [])
@@ -32,17 +30,10 @@ module DuctExtension
           next unless group.valid?
 
           results << group
-
           collect_groups(group.entities, results)
         end
 
-        entities.grep(Sketchup::ComponentInstance).each do |instance|
-          next unless instance.valid?
-
-          # Avoid descending into arbitrary component definitions. Our duct
-          # geometry is stored as groups, not component instances.
-        end
-
+        # Duct geometry is stored as groups, not arbitrary component instances.
         results
       rescue => error
         puts "NetworkRebuildService.collect_groups failed: #{error.message}"
@@ -55,14 +46,10 @@ module DuctExtension
         ports.each_with_index do |port_a, index|
           ((index + 1)...ports.length).each do |other_index|
             port_b = ports[other_index]
-
             next unless port_a && port_b
             next if port_a.piece == port_b.piece
             next if network.connected?(port_a, port_b)
-
-            distance = port_a.point.distance(port_b.point)
-
-            next if distance > Model::Network::CONNECTION_DISTANCE * 4.0
+            next if port_a.point.distance(port_b.point) > Model::Network::CONNECTION_DISTANCE * 4.0
 
             network.connect_ports(port_a, port_b)
           end

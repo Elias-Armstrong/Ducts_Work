@@ -25,63 +25,64 @@ module DuctExtension
 
         main_vector.normalize!
 
-        center = project_point_to_line(tap_point, point_a, point_b)
+        center = TeePlacementCalculator.project_point_to_segment(
+          point: tap_point,
+          line_start: point_a,
+          line_end: point_b
+        )
         return nil unless center
 
         branch_vector =
           if dimensions[:shape] == :rectangular
-            rectangular_side_branch_vector(
+            TeePlacementCalculator.rectangular_side_branch_vector(
               tap_point: tap_point,
               center: center,
               main_vector: main_vector,
               fallback_branch_direction: branch_direction
             )
           else
-            perpendicularized(branch_direction, main_vector)
+            Geometry::VectorMath.perpendicularized(branch_direction, main_vector)
           end
 
         return nil unless branch_vector
         return nil if main_vector.parallel?(branch_vector)
 
-        socket_depth = tee_socket_depth(dimensions)
+        socket_depth = TeePlacementCalculator.socket_depth(dimensions)
 
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
         main_end_socket = center.offset(main_vector, socket_depth)
 
-        min_length = largest_dimension(dimensions) * MIN_SEGMENT_LENGTH_FACTOR
+        min_length = Model::DimensionUtils.largest(dimensions) * MIN_SEGMENT_LENGTH_FACTOR
 
         return nil if point_a.distance(main_start_socket) < min_length
         return nil if point_b.distance(main_end_socket) < min_length
 
         old_group = pipe_piece.group
 
-        model.start_operation("Insert Duct Tee", true)
-
-        old_group.erase! if old_group && old_group.valid?
-        network.remove_piece(pipe_piece)
-
-        result = build_split_pipe_and_tee(
+        ModelOperation.run(
           model: model,
           network: network,
-          point_a: point_a,
-          point_b: point_b,
-          center: center,
-          main_vector: main_vector,
-          branch_vector: branch_vector,
-          dimensions: dimensions,
-          socket_depth: socket_depth
-        )
+          name: "Insert Duct Tee"
+        ) do |operation|
+          old_group.erase! if old_group && old_group.valid?
+          network.remove_piece(pipe_piece)
 
-        if result
-          network.rebuild_index! if network.respond_to?(:rebuild_index!)
-          model.commit_operation
+          result = build_split_pipe_and_tee(
+            model: model,
+            network: network,
+            point_a: point_a,
+            point_b: point_b,
+            center: center,
+            main_vector: main_vector,
+            branch_vector: branch_vector,
+            dimensions: dimensions,
+            socket_depth: socket_depth
+          )
+
+          operation.abort!(nil) unless result
           result
-        else
-          model.abort_operation
-          nil
         end
       rescue => error
-        model.abort_operation
         puts "TeeInsertService.insert_tee_on_pipe failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil
@@ -110,7 +111,7 @@ module DuctExtension
 
         branch_base =
           if dimensions[:shape] == :rectangular
-            rectangular_branch_base_point(
+            TeePlacementCalculator.rectangular_branch_base_point(
               center: center,
               branch_vector: branch_vector,
               dimensions: dimensions,
@@ -429,102 +430,10 @@ module DuctExtension
         puts "TeeInsertService.remove_cap_for_port failed: #{error.message}"
       end
 
-      def self.project_point_to_line(point, line_start, line_end)
-        axis = line_start.vector_to(line_end)
-        return nil if axis.length == 0
-
-        length = axis.length
-        axis.normalize!
-
-        from_start = line_start.vector_to(point)
-        distance_along = from_start.dot(axis)
-
-        return nil if distance_along <= 0.0
-        return nil if distance_along >= length
-
-        line_start.offset(axis, distance_along)
-      end
-
-      def self.rectangular_side_branch_vector(
-        tap_point:,
-        center:,
-        main_vector:,
-        fallback_branch_direction:
-      )
-        basis = Geometry::RectangularFrame.basis_for_axis(main_vector)
-        return perpendicularized(fallback_branch_direction, main_vector) unless basis
-
-        radial = center.vector_to(tap_point)
-        radial = perpendicularized(radial, main_vector)
-
-        unless radial
-          return perpendicularized(fallback_branch_direction, main_vector)
-        end
-
-        candidates = [
-          basis[:width_axis],
-          basis[:width_axis].clone.reverse,
-          basis[:height_axis],
-          basis[:height_axis].clone.reverse
-        ]
-
-        best = candidates.max_by { |candidate| candidate.dot(radial) }
-        best && best.clone
-      end
-
-      def self.rectangular_branch_base_point(center:, branch_vector:, dimensions:, basis:)
-        return center unless basis
-
-        branch = branch_vector.clone
-        return center if branch.length == 0
-
-        branch.normalize!
-
-        width_dot = branch.dot(basis[:width_axis]).abs
-        height_dot = branch.dot(basis[:height_axis]).abs
-
-        offset =
-          if width_dot >= height_dot
-            dimensions[:width].to_f / 2.0
-          else
-            dimensions[:height].to_f / 2.0
-          end
-
-        center.offset(branch, offset)
-      end
-
-      def self.perpendicularized(vector, axis)
-        Geometry::VectorMath.perpendicularized(vector, axis)
-      end
-
-      def self.tee_socket_depth(dimensions)
-        if dimensions[:shape] == :rectangular
-          return Geometry::RectangularTeeBuilder.socket_depth(
-            dimensions[:width],
-            dimensions[:height]
-          )
-        end
-
-        Geometry::TeeBuilder.socket_depth(dimensions[:diameter])
-      rescue
-        largest_dimension(dimensions) * FALLBACK_SOCKET_DEPTH_FACTOR
-      end
-
-      def self.largest_dimension(dimensions)
-        Model::DimensionUtils.largest(dimensions)
-      end
-
       private_class_method :build_split_pipe_and_tee
       private_class_method :build_pipe_piece
-      private_class_method :add_cap_for_port
       private_class_method :add_round_cap_for_port
       private_class_method :add_rectangular_cap_for_port
-      private_class_method :project_point_to_line
-      private_class_method :rectangular_side_branch_vector
-      private_class_method :rectangular_branch_base_point
-      private_class_method :perpendicularized
-      private_class_method :tee_socket_depth
-      private_class_method :largest_dimension
     end
   end
 end

@@ -5,8 +5,8 @@ module DuctExtension
 
       DEFAULT_BEND_RADIUS_FACTOR = 1.5
 
-      def self.execute(model, steps, network)
-        new(model, network).execute(steps)
+      def self.execute(model, steps, network, connect_target_port: nil)
+        new(model, network).execute(steps, connect_target_port: connect_target_port)
       end
 
       def initialize(model, network)
@@ -15,44 +15,45 @@ module DuctExtension
         @last_port = nil
       end
 
-      def execute(steps)
+      def execute(steps, connect_target_port: nil)
         steps = Array(steps).compact
         return nil if steps.empty?
 
-        @model.start_operation("Draw Orthogonal Duct", true)
+        ModelOperation.run(
+          model: @model,
+          network: @network,
+          name: "Draw Orthogonal Duct"
+        ) do |operation|
+          result = nil
 
-        result = nil
+          steps.each do |step|
+            result =
+              case step.type
+              when :pipe
+                execute_pipe(step)
+              when :elbow
+                execute_elbow(step)
+              when :reducer
+                execute_reducer(step)
+              else
+                puts "GeometryExecutor: unknown step type #{step.type.inspect}"
+                nil
+              end
 
-        steps.each do |step|
-          result =
-            case step.type
-            when :pipe
-              execute_pipe(step)
-            when :elbow
-              execute_elbow(step)
-            when :reducer
-              execute_reducer(step)
-            else
-              puts "GeometryExecutor: unknown step type #{step.type.inspect}"
-              nil
-            end
-
-          unless result
-            @model.abort_operation
-            return nil
+            operation.abort!(nil) unless result
           end
+
+          if connect_target_port
+            connection = @network.connect_ports(@last_port, connect_target_port)
+            operation.abort!(nil) unless connection
+          end
+
+          {
+            last_port: @last_port,
+            last_piece: result
+          }
         end
-
-        @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
-
-        @model.commit_operation
-
-        {
-          last_port: @last_port,
-          last_piece: result
-        }
       rescue => error
-        @model.abort_operation
         puts "GeometryExecutor.execute failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

@@ -48,7 +48,11 @@ module DuctExtension
           dimensions: dimensions
         )
 
-        model.start_operation("Insert Duct Vent", true)
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert Duct Vent"
+        ) do |operation|
 
         result =
           if end_port
@@ -86,15 +90,10 @@ module DuctExtension
             )
           end
 
-        unless result
-          model.abort_operation
-          return nil
+          operation.abort!(nil) unless result
+          result
         end
-
-        model.commit_operation
-        result
       rescue => error
-        model.abort_operation if model
         puts "VentInsertService.insert_on_piece failed: #{error.message}"
         puts error.backtrace.join("\n")
         nil

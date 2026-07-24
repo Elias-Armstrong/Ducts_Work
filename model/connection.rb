@@ -13,6 +13,10 @@ module DuctExtension
         @port_a == port || @port_b == port
       end
 
+      def includes_any?(ports)
+        Array(ports).any? { |port| includes?(port) }
+      end
+
       def other(port)
         return @port_b if @port_a == port
         return @port_a if @port_b == port
