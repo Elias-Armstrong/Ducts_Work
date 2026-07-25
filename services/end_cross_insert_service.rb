@@ -184,51 +184,11 @@ module DuctExtension
       end
 
       def self.prompt_for_branch_dimensions(dimensions)
-        if dimensions[:shape] == :rectangular
-          prompts = [
-            "Main Width:",
-            "Main Height:",
-            "Branch Width:",
-            "Branch Height:"
-          ]
-
-          defaults = [
-            dimensions[:width].to_s,
-            dimensions[:height].to_s,
-            dimensions[:width].to_s,
-            dimensions[:height].to_s
-          ]
-
-          input = ::UI.inputbox(prompts, defaults, [], "End Cross Branch Size")
-          return nil unless input
-
-          branch_width = Model::DuctDimensions.positive_number(input[2], dimensions[:width])
-          branch_height = Model::DuctDimensions.positive_number(input[3], dimensions[:height])
-
-          {
-            shape: :rectangular,
-            diameter: [branch_width, branch_height].max,
-            width: branch_width,
-            height: branch_height
-          }
-        else
-          prompts = ["Main Diameter:", "Branch Diameter:"]
-          defaults = [dimensions[:diameter].to_s, dimensions[:diameter].to_s]
-          input = ::UI.inputbox(prompts, defaults, [], "End Cross Branch Size")
-          return nil unless input
-
-          branch_diameter = Model::DuctDimensions.positive_number(input[1], dimensions[:diameter])
-
-          {
-            shape: :round,
-            diameter: branch_diameter,
-            width: branch_diameter,
-            height: branch_diameter
-          }
-        end
-      rescue => error
-        puts "EndCrossInsertService.prompt_for_branch_dimensions failed: #{error.message}"
-        nil
+        BranchSizePrompt.ask(
+          main_dimensions: dimensions,
+          title: "End Cross Branch Size",
+          allow_round_from_rectangular: false
+        )
       end
 
       private_class_method :prompt_for_branch_dimensions

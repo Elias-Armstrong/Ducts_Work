@@ -2,10 +2,19 @@ module DuctExtension
   module Geometry
     module RectangularTeeBuilder
       SOCKET_DEPTH_FACTOR = 0.82
+      SIDE_TAKEOFF_BRANCH_DEPTH_FACTOR = 0.16
+      SIDE_TAKEOFF_BRANCH_DEPTH_MIN = 1.0
       EPSILON = 0.000001
 
       def self.socket_depth(width, height)
         [width.to_f, height.to_f].max * SOCKET_DEPTH_FACTOR
+      end
+
+      def self.side_takeoff_branch_depth(width, height)
+        [
+          [width.to_f, height.to_f].max * SIDE_TAKEOFF_BRANCH_DEPTH_FACTOR,
+          SIDE_TAKEOFF_BRANCH_DEPTH_MIN
+        ].max
       end
 
       # The branch shell and the branch Port must use the exact same frame.
@@ -55,6 +64,7 @@ module DuctExtension
         width,
         height,
         socket_depth = nil,
+        branch_depth: nil,
         preferred_main_width_axis: nil,
         preferred_main_height_axis: nil
       )
@@ -67,9 +77,11 @@ module DuctExtension
         width = width.to_f
         height = height.to_f
         depth = socket_depth ? socket_depth.to_f : self.socket_depth(width, height)
+        branch_depth = branch_depth ? branch_depth.to_f : depth
 
         return false unless center && branch_base && main_axis && branch_axis
         return false if width <= 0.0 || height <= 0.0 || depth <= EPSILON
+        return false if branch_depth <= EPSILON
         return false if main_axis.parallel?(branch_axis)
 
         # Make the requested branch vector agree with the supplied branch-base
@@ -91,7 +103,7 @@ module DuctExtension
 
         main_start = center.offset(main_axis.clone.reverse, depth)
         main_end = center.offset(main_axis, depth)
-        branch_end = branch_base.offset(branch_axis, depth)
+        branch_end = branch_base.offset(branch_axis, branch_depth)
 
         main_ok = RectangularPipeBuilder.build_into(
           group,

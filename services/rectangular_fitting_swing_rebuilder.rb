@@ -298,6 +298,17 @@ module DuctExtension
         side_axis:,
         height_axis:
       )
+        if side_takeoff_wye?(piece, anchor_port, forward_axis)
+          return rebuild_rectangular_side_takeoff_wye(
+            piece: piece,
+            anchor_port: anchor_port,
+            dimensions: dimensions,
+            forward_axis: forward_axis,
+            side_axis: side_axis,
+            height_axis: height_axis
+          )
+        end
+
         base_socket_depth = Geometry::WyeBuilder.socket_depth(
           dimensions[:width],
           dimensions[:height]
@@ -366,6 +377,104 @@ module DuctExtension
         puts error.backtrace.join("\n")
         false
       end
+
+      def self.side_takeoff_wye?(piece, anchor_port, forward_axis)
+        free_ports = Array(piece.ports).compact.reject { |port| port == anchor_port }
+        branch_port = free_ports.min_by do |port|
+          vector = Geometry::VectorMath.normalized(port.outward_vector)
+          vector ? vector.dot(forward_axis).abs : 1.0
+        end
+        return false unless branch_port
+
+        branch_vector = Geometry::VectorMath.normalized(branch_port.outward_vector)
+        branch_vector && branch_vector.dot(forward_axis).abs < 0.20
+      rescue
+        false
+      end
+      private_class_method :side_takeoff_wye?
+
+      def self.rebuild_rectangular_side_takeoff_wye(
+        piece:,
+        anchor_port:,
+        dimensions:,
+        forward_axis:,
+        side_axis:,
+        height_axis:
+      )
+        main_depth = Geometry::RectangularTeeBuilder.socket_depth(
+          dimensions[:width],
+          dimensions[:height]
+        )
+        branch_depth = Geometry::RectangularTeeBuilder.side_takeoff_branch_depth(
+          dimensions[:width],
+          dimensions[:height]
+        )
+
+        center = anchor_port.point.offset(forward_axis, main_depth)
+        branch_axis = side_axis.clone
+        branch_axis.normalize!
+
+        main_basis = {
+          width_axis: side_axis,
+          height_axis: height_axis
+        }
+
+        face_offset = rectangular_face_offset_for_direction(
+          direction: branch_axis,
+          dimensions: dimensions,
+          basis: main_basis
+        )
+        branch_base = center.offset(branch_axis, face_offset)
+
+        success = Geometry::RectangularTeeBuilder.build_into(
+          piece.group,
+          center,
+          branch_base,
+          forward_axis,
+          branch_axis,
+          dimensions[:width],
+          dimensions[:height],
+          main_depth,
+          branch_depth: branch_depth,
+          preferred_main_width_axis: side_axis,
+          preferred_main_height_axis: height_axis
+        )
+        return false unless success
+
+        branch_basis = Geometry::RectangularTeeBuilder.branch_basis(
+          forward_axis,
+          branch_axis,
+          main_basis: main_basis
+        )
+        return false unless branch_basis
+
+        stem_into_wye = forward_axis.clone.reverse
+        forward_point = center.offset(forward_axis, main_depth)
+        branch_point = branch_base.offset(branch_axis, branch_depth)
+
+        apply_rectangular_port_layout(
+          piece: piece,
+          fixed_ports: [anchor_port],
+          fixed_specs: [
+            port_spec(anchor_port.point, stem_into_wye, side_axis, height_axis)
+          ],
+          free_specs: [
+            port_spec(forward_point, forward_axis, side_axis, height_axis),
+            port_spec(
+              branch_point,
+              branch_axis,
+              branch_basis[:width_axis],
+              branch_basis[:height_axis]
+            )
+          ],
+          dimensions: dimensions
+        )
+      rescue => error
+        puts "RectangularFittingSwingRebuilder.rebuild_rectangular_side_takeoff_wye failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        false
+      end
+      private_class_method :rebuild_rectangular_side_takeoff_wye
 
       def self.rebuild_rectangular_inline_tee(
         piece:,

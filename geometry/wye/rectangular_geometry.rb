@@ -17,22 +17,14 @@ module DuctExtension
       )
         return false if width <= 0.0 || height <= 0.0
 
-        branch_shape = branch_shape.to_sym rescue nil
-        branch_shape = :rectangular unless branch_shape == :round
-
-        branch_diameter = branch_diameter.to_f
+        # Mixed-shape outlets are now built as a stable rectangular fitting
+        # followed by ReducerBuilder's rectangular/round transition. Keeping
+        # this builder rectangular-only removes the fragile intersecting-pipe
+        # implementation that used to create the "tube stuck through a box" look.
         branch_width = branch_width.to_f
         branch_height = branch_height.to_f
-
-        if branch_shape == :round
-          branch_diameter = [width, height].max if branch_diameter <= 0.0
-          branch_width = branch_diameter
-          branch_height = branch_diameter
-        else
-          branch_width = width if branch_width <= 0.0
-          branch_height = height if branch_height <= 0.0
-          branch_diameter = [branch_width, branch_height].max
-        end
+        branch_width = width if branch_width <= 0.0
+        branch_height = height if branch_height <= 0.0
 
         forward_axis = RectangularFrame.normalized(forward_vector)
         return false unless forward_axis
@@ -75,172 +67,28 @@ module DuctExtension
 
         main_distance = main_outlet_distance(width, height)
 
-        if branch_shape == :round
-          branch_distance = rectangular_round_branch_outlet_distance(
-            width,
-            height,
-            branch_diameter,
-            branch_axis,
-            side_axis
-          )
+        branch_distance = branch_outlet_distance(branch_width, branch_height)
 
-          build_rectangular_to_round_wye_body(
-            group: group,
-            center: center,
-            forward_axis: forward_axis,
-            side_axis: side_axis,
-            height_axis: height_axis,
-            branch_axis: branch_axis,
-            width: width,
-            height: height,
-            branch_diameter: branch_diameter,
-            main_distance: main_distance,
-            branch_distance: branch_distance
-          )
-        else
-          branch_distance = branch_outlet_distance(branch_width, branch_height)
-
-          build_rectangular_to_rectangular_wye_body(
-            group: group,
-            center: center,
-            forward_axis: forward_axis,
-            side_axis: side_axis,
-            height_axis: height_axis,
-            branch_axis: branch_axis,
-            branch_width_axis: branch_width_axis,
-            width: width,
-            height: height,
-            branch_width: branch_width,
-            branch_height: branch_height,
-            main_distance: main_distance,
-            branch_distance: branch_distance
-          )
-        end
+        build_rectangular_to_rectangular_wye_body(
+          group: group,
+          center: center,
+          forward_axis: forward_axis,
+          side_axis: side_axis,
+          height_axis: height_axis,
+          branch_axis: branch_axis,
+          branch_width_axis: branch_width_axis,
+          width: width,
+          height: height,
+          branch_width: branch_width,
+          branch_height: branch_height,
+          main_distance: main_distance,
+          branch_distance: branch_distance
+        )
 
         Mesh.apply_material_from_group(group)
         true
       rescue => error
         puts "WyeBuilder.build_rectangular failed: #{error.message}"
-        puts error.backtrace.join("\n")
-        false
-      end
-
-      def self.build_rectangular_to_round_wye_body(
-        group:,
-        center:,
-        forward_axis:,
-        side_axis:,
-        height_axis:,
-        branch_axis:,
-        width:,
-        height:,
-        branch_diameter:,
-        main_distance:,
-        branch_distance:
-      )
-        half_width = width.to_f / 2.0
-        half_height = height.to_f / 2.0
-        radius = branch_diameter.to_f / 2.0
-
-        stem_end = center.offset(forward_axis.clone.reverse, main_distance)
-        forward_end = center.offset(forward_axis, main_distance)
-
-        RectangularPipeBuilder.build_into(
-          group,
-          stem_end,
-          forward_end,
-          width,
-          height,
-          overlap_start: false,
-          overlap_end: false,
-          cap_start: false,
-          cap_end: false,
-          preferred_width_axis: side_axis,
-          preferred_height_axis: height_axis
-        )
-
-        branch_side_component = branch_axis.dot(side_axis).abs
-        branch_side_component = 0.001 if branch_side_component < 0.001
-
-        sidewall_distance = half_width / branch_side_component
-
-        branch_start_distance = sidewall_distance - radius * ROUND_BRANCH_SIDEWALL_OVERLAP_FACTOR
-        branch_start_distance = 0.0 if branch_start_distance < 0.0
-
-        branch_start = center.offset(branch_axis, branch_start_distance)
-        branch_end = center.offset(branch_axis, branch_distance)
-
-        PipeBuilder.build_into(
-          group,
-          branch_start,
-          branch_end,
-          branch_diameter,
-          overlap_start: true,
-          overlap_end: false,
-          cap_start: false,
-          cap_end: false
-        )
-
-        add_rectangular_socket_ring_edges(
-          entities: group.entities,
-          center: stem_end,
-          width_axis: side_axis,
-          height_axis: height_axis,
-          half_width: half_width,
-          half_height: half_height
-        )
-
-        add_rectangular_socket_ring_edges(
-          entities: group.entities,
-          center: forward_end,
-          width_axis: side_axis,
-          height_axis: height_axis,
-          half_width: half_width,
-          half_height: half_height
-        )
-
-        add_round_branch_saddle_edges(
-          group: group,
-          center: center,
-          side_axis: side_axis,
-          height_axis: height_axis,
-          branch_axis: branch_axis,
-          main_half_width: half_width,
-          main_half_height: half_height,
-          branch_radius: radius
-        )
-
-        harden_all_edges(group)
-
-        clean_round_branch_visual_edges(
-          group: group,
-          start_point: branch_start,
-          end_point: branch_end,
-          axis: branch_axis,
-          radius: radius
-        )
-
-        clean_round_branch_entry_artifacts(
-          group: group,
-          center: center,
-          side_axis: side_axis,
-          height_axis: height_axis,
-          branch_axis: branch_axis,
-          main_half_width: half_width,
-          main_half_height: half_height,
-          branch_radius: radius
-        )
-
-        add_round_socket_ring(
-          group: group,
-          center: branch_end,
-          direction: branch_axis,
-          radius: radius
-        )
-
-        true
-      rescue => error
-        puts "WyeBuilder.build_rectangular_to_round_wye_body failed: #{error.message}"
         puts error.backtrace.join("\n")
         false
       end

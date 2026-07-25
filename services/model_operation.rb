@@ -3,6 +3,9 @@ module DuctExtension
     # Coordinates a SketchUp operation with the in-memory duct graph. If an
     # operation aborts after mutating Network, the graph is rebuilt in-place
     # from the rolled-back model so callers do not keep stale topology objects.
+    #
+    # Most callers should use .run. Interactive tools can call start!, commit!,
+    # and rollback! so a mouse drag remains one SketchUp undo operation.
     class ModelOperation
       class Abort < StandardError
         attr_reader :result
@@ -37,10 +40,33 @@ module DuctExtension
       end
 
       def run
+        start!
+        result = yield(self)
+        commit!(result)
+      rescue Abort => abort_signal
+        rollback!
+        abort_signal.result
+      rescue Exception
+        rollback!
+        raise
+      end
+
+      # Begin a long-lived operation. Used by interactive drags that span
+      # several SketchUp Tool callbacks.
+      def start!
+        return self if @started && !@finished
+        raise "Model operation already finished" if @finished
+
         @model.start_operation(@name, true)
         @started = true
+        self
+      end
 
-        result = yield(self)
+      # Finish a previously-started operation and make the Ruby graph agree
+      # with the final SketchUp geometry before committing the undo step.
+      def commit!(result = nil)
+        return result if @finished
+        start! unless @started
 
         finalize_network!
         validate_network! if validation_enabled?
@@ -48,14 +74,19 @@ module DuctExtension
         @model.commit_operation
         @finished = true
         result
-      rescue Abort => abort_signal
-        abort_operation!
-        recover_network! if @rebuild_on_failure
-        abort_signal.result
       rescue Exception
+        rollback!
+        raise
+      end
+
+      # Abort a started operation and reconstruct the in-memory network from
+      # the rolled-back SketchUp model. Safe to call more than once.
+      def rollback!
+        return if @finished
+
         abort_operation!
         recover_network! if @rebuild_on_failure
-        raise
+        nil
       end
 
       def abort!(result = nil)

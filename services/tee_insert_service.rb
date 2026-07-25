@@ -4,7 +4,7 @@ module DuctExtension
       MIN_SEGMENT_LENGTH_FACTOR = 0.5
       FALLBACK_SOCKET_DEPTH_FACTOR = 0.82
 
-      def self.insert_tee_on_pipe(model:, network:, pipe_piece:, tap_point:, branch_direction:)
+      def self.insert_tee_on_pipe(model:, network:, pipe_piece:, tap_point:, branch_direction:, branch_dimensions: nil)
         return nil unless pipe_piece
         return nil unless pipe_piece.type == :pipe
         return nil unless pipe_piece.ports.length == 2
@@ -13,6 +13,10 @@ module DuctExtension
         old_port_b = pipe_piece.ports[1]
 
         dimensions = Model::Port.dimensions_from_params({}, old_port_a)
+        requested_branch_dimensions = Model::DuctDimensions.coerce(
+          branch_dimensions || dimensions,
+          fallback: dimensions
+        )
 
         point_a = old_port_a.point
         point_b = old_port_b.point
@@ -88,6 +92,7 @@ module DuctExtension
             dimensions: dimensions,
             socket_depth: socket_depth,
             rectangular_basis: rectangular_basis,
+            requested_branch_dimensions: requested_branch_dimensions,
             external_neighbors_a: external_neighbors_a,
             external_neighbors_b: external_neighbors_b
           )
@@ -135,6 +140,7 @@ module DuctExtension
         dimensions:,
         socket_depth:,
         rectangular_basis: nil,
+        requested_branch_dimensions: nil,
         external_neighbors_a: [],
         external_neighbors_b: []
       )
@@ -271,11 +277,27 @@ module DuctExtension
         reconnect_neighbors(network, pipe_a.ports[0], external_neighbors_a)
         reconnect_neighbors(network, pipe_b.ports[1], external_neighbors_b)
 
-        PortCapService.add(tee_group, branch_port)
+        requested_branch_dimensions = Model::DuctDimensions.coerce(
+          requested_branch_dimensions || dimensions,
+          fallback: dimensions
+        )
+
+        transition = BranchTransitionService.attach(
+          model: model,
+          network: network,
+          source_port: branch_port,
+          target_dimensions: requested_branch_dimensions,
+          preferred_width_axis: rectangular_basis && rectangular_basis[:width_axis],
+          preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis],
+          cap_output: true
+        )
+        return nil unless transition
 
         {
           tee_piece: tee_piece,
-          branch_port: branch_port,
+          branch_port: transition[:output_port],
+          native_branch_port: branch_port,
+          branch_transition_piece: transition[:piece],
           pipe_a: pipe_a,
           pipe_b: pipe_b
         }

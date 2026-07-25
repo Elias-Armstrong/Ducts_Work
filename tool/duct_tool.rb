@@ -83,6 +83,7 @@ module DuctExtension
         @shift_left_orbiting = false
         @orbit_last_x = nil
         @orbit_last_y = nil
+        @connector_swing_session = nil
 
         @typed_length_buffer = ""
       end
@@ -155,6 +156,7 @@ module DuctExtension
         @shift_left_orbiting = false
         @orbit_last_x = nil
         @orbit_last_y = nil
+        @connector_swing_session = nil
         reset_typed_length
 
         update_status_for_current_shape
@@ -165,6 +167,8 @@ module DuctExtension
       end
 
       def onCancel(reason, view)
+        cancel_connector_swing_drag(view) if @connector_swing_session
+
         @start_point = nil
         @last_port = nil
         @orthogonal_axis_lock = nil
@@ -202,6 +206,11 @@ module DuctExtension
       def onMouseMove(flags, x, y, view)
         @last_mouse_x = x
         @last_mouse_y = y
+
+        if @connector_swing_session
+          update_connector_swing_drag(view, x, y)
+          return
+        end
 
         middle_down = middle_mouse_down?(flags)
 
@@ -313,7 +322,7 @@ module DuctExtension
         end
 
         if ctrl_down?(flags)
-          handle_connector_swing_click(view, x, y)
+          begin_connector_swing_drag(view, x, y)
           view.invalidate if view
           return true
         end
@@ -446,6 +455,11 @@ module DuctExtension
       end
 
       def onLButtonUp(flags, x, y, view)
+        if @connector_swing_session
+          finish_connector_swing_drag(view)
+          return true
+        end
+
         if @shift_left_orbiting
           @shift_left_orbiting = false
           @orbit_last_x = nil
@@ -456,6 +470,10 @@ module DuctExtension
         end
 
         false
+      end
+
+      def deactivate(view)
+        cancel_connector_swing_drag(view) if @connector_swing_session
       end
 
       private

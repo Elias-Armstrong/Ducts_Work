@@ -8,6 +8,7 @@ module DuctExtension
         click_point:,
         active_start_point:,
         active_start_port: nil,
+        active_dimensions: nil,
         requested_branch_direction: nil
       )
         return nil unless model && network
@@ -19,6 +20,15 @@ module DuctExtension
         port_a = target_pipe_piece.ports[0]
         port_b = target_pipe_piece.ports[1]
         dimensions = Model::Port.dimensions_from_params({}, port_a)
+
+        requested_branch_dimensions =
+          if active_start_port
+            Model::Port.dimensions_from_params({}, active_start_port)
+          elsif active_dimensions
+            Model::DuctDimensions.coerce(active_dimensions, fallback: dimensions)
+          else
+            dimensions
+          end
 
         placement = TeePlacementCalculator.best_placement(
           pipe_start: port_a.point,
@@ -38,7 +48,8 @@ module DuctExtension
           network: network,
           pipe_piece: target_pipe_piece,
           tap_point: placement[:center],
-          branch_direction: placement[:branch_vector]
+          branch_direction: placement[:branch_vector],
+          branch_dimensions: requested_branch_dimensions
         )
       rescue => error
         puts "PipeTargetConnectionService.insert_smart_tee_target failed: #{error.message}"

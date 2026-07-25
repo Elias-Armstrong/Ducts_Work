@@ -196,9 +196,7 @@ module DuctExtension
       end
 
       def draw_preview_centerline(view, start_point, end_point, snapped_port)
-        view.drawing_color = preview_color(snapped_port)
-        view.line_width = 2
-        view.draw(GL_LINES, [start_point, end_point])
+        draw_preview_lines(view, [start_point, end_point], snapped_port, line_width: 2)
       end
 
       def draw_ghost_duct_preview(view, start_point, end_point, snapped_port)
@@ -221,8 +219,14 @@ module DuctExtension
         half_width = @current_width.to_f / 2.0
         half_height = @current_height.to_f / 2.0
 
-        start_corners = preview_rectangle_corners(start_point, width_axis, height_axis, half_width, half_height)
-        end_corners = preview_rectangle_corners(end_point, width_axis, height_axis, half_width, half_height)
+        start_corners = Geometry::PrimitiveHelpers.rectangle_corners(
+          center: start_point, width_axis: width_axis, height_axis: height_axis,
+          half_width: half_width, half_height: half_height
+        )
+        end_corners = Geometry::PrimitiveHelpers.rectangle_corners(
+          center: end_point, width_axis: width_axis, height_axis: height_axis,
+          half_width: half_width, half_height: half_height
+        )
 
         lines = []
 
@@ -239,9 +243,7 @@ module DuctExtension
           lines << end_corners[i]
         end
 
-        view.drawing_color = preview_color(snapped_port)
-        view.line_width = 1
-        view.draw(GL_LINES, lines)
+        draw_preview_lines(view, lines, snapped_port)
       end
 
       def draw_round_ghost_preview(view, start_point, end_point, snapped_port)
@@ -289,9 +291,32 @@ module DuctExtension
           end
         end
 
+        draw_preview_lines(view, lines, snapped_port)
+      end
+
+      # Preview geometry is calculated in 3D, then rendered as a screen-space
+      # overlay. SketchUp can depth-hide view.draw geometry behind the model at
+      # certain camera angles; draw2d keeps the hologram visible without changing
+      # the actual route points used for construction.
+      def draw_preview_lines(view, points, snapped_port, line_width: 1)
+        points = Array(points).compact
+        return if points.empty?
+
         view.drawing_color = preview_color(snapped_port)
-        view.line_width = 1
-        view.draw(GL_LINES, lines)
+        view.line_width = line_width
+
+        if view.respond_to?(:draw2d) && view.respond_to?(:screen_coords)
+          screen_points = points.map { |point| view.screen_coords(point) }
+          if screen_points.all?
+            view.draw2d(GL_LINES, screen_points)
+            return
+          end
+        end
+
+        view.draw(GL_LINES, points)
+      rescue => error
+        puts "Preview overlay draw failed: #{error.message}"
+        view.draw(GL_LINES, points) rescue nil
       end
 
       def preview_color(snapped_port)
@@ -304,15 +329,6 @@ module DuctExtension
         else
           "red"
         end
-      end
-
-      def preview_rectangle_corners(center, width_axis, height_axis, half_width, half_height)
-        [
-          center.offset(width_axis, half_width).offset(height_axis, half_height),
-          center.offset(width_axis.clone.reverse, half_width).offset(height_axis, half_height),
-          center.offset(width_axis.clone.reverse, half_width).offset(height_axis.clone.reverse, half_height),
-          center.offset(width_axis, half_width).offset(height_axis.clone.reverse, half_height)
-        ]
       end
 
       def preview_rectangular_axes(direction)

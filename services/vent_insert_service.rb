@@ -43,6 +43,7 @@ module DuctExtension
         axis.normalize!
 
         end_port = clicked_end_port(
+          network: network,
           ports: [port_a, port_b],
           click_point: click_point,
           dimensions: dimensions
@@ -366,11 +367,7 @@ module DuctExtension
             axis_point.offset(outward_axis, dimensions[:diameter].to_f / 2.0)
           end
 
-        largest = [
-          dimensions[:diameter].to_f,
-          dimensions[:width].to_f,
-          dimensions[:height].to_f
-        ].max
+        largest = Model::DuctDimensions.coerce(dimensions).largest
 
         plate_width = register_width.to_f
         plate_height = register_height.to_f
@@ -466,23 +463,22 @@ module DuctExtension
         amounts
       end
 
-      def self.clicked_end_port(ports:, click_point:, dimensions:)
+      def self.clicked_end_port(network:, ports:, click_point:, dimensions:)
+        return nil unless network && network.respond_to?(:open_external_port?)
         return nil unless ports && ports.length >= 2
 
         port_a = ports[0]
         port_b = ports[1]
+        open_ports = ports.select { |port| network.open_external_port?(port) }
+        return nil if open_ports.empty?
 
-        largest = [
-          dimensions[:diameter].to_f,
-          dimensions[:width].to_f,
-          dimensions[:height].to_f
-        ].max
+        largest = Model::DuctDimensions.coerce(dimensions).largest
 
         threshold = largest * END_CLICK_DISTANCE_FACTOR
         threshold = [threshold, END_CLICK_MAX_DISTANCE].min
         threshold = [threshold, largest * 0.75].max
 
-        best_by_distance = ports.min_by { |port| port.point.distance(click_point) }
+        best_by_distance = open_ports.min_by { |port| port.point.distance(click_point) }
 
         if best_by_distance && best_by_distance.point.distance(click_point) <= threshold
           return best_by_distance
@@ -496,8 +492,8 @@ module DuctExtension
 
         projected = port_a.point.vector_to(click_point).dot(axis)
 
-        return port_a if projected <= threshold
-        return port_b if (length - projected) <= threshold
+        return port_a if open_ports.include?(port_a) && projected <= threshold
+        return port_b if open_ports.include?(port_b) && (length - projected) <= threshold
 
         nil
       rescue

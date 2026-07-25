@@ -43,8 +43,8 @@ module DuctExtension
         true
       end
 
-      def handle_connector_swing_click(view, x, y)
-        result = Services::ConnectorSwingService.swing_at_click(
+      def begin_connector_swing_drag(view, x, y)
+        result = Services::ConnectorSwingService.begin_drag(
           model: Sketchup.active_model,
           network: @network,
           view: view,
@@ -54,35 +54,109 @@ module DuctExtension
 
         case result[:status]
         when :ok
+          @connector_swing_session = result[:session]
           @last_port = nil
           @start_point = nil
           @orthogonal_axis_lock = nil
-
-          @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
-
-          angle_text = result[:angle_degrees] ? "#{result[:angle_degrees].round} degrees" : "90 degrees"
-          Sketchup.status_text = "Connector swung #{angle_text} around its connected pipe."
+          Sketchup.status_text =
+            "Ctrl-drag to swing connector. Angle snaps every #{Services::ConnectorSwingService::DRAG_SNAP_DEGREES} degrees."
+          true
         when :no_piece
-          Sketchup.status_text = "Ctrl-click a tee, cross, or wye to swing it."
-        when :no_valid_angle
-          ::UI.messagebox(
-            "This rectangular connector cannot swing to a clean orientation here.\n\n" \
-            "For rectangular duct, the connected face must keep the same width/height orientation. Try a 180-degree opposite-side swing, disconnect more branches, or use a square duct size."
-          )
+          Sketchup.status_text = "Ctrl-drag a tee, cross, or wye to swing it."
+          false
         when :too_many_connections
           ::UI.messagebox(
             "This connector has too many attached ducts to swing safely.\n\n" \
-            "Disconnect the side branch first, then Ctrl-click the connector again."
+            "Disconnect the side branch first, then Ctrl-drag the connector again."
           )
+          false
         when :not_swingable
           Sketchup.status_text = "Only tees, crosses, and wyes can be swung right now."
+          false
         else
-          ::UI.messagebox("Could not swing this connector. Check the Ruby Console for details.")
+          ::UI.messagebox("Could not start connector swing. Check the Ruby Console for details.")
+          false
         end
       rescue => error
-        puts "DuctTool.handle_connector_swing_click failed: #{error.message}"
+        puts "DuctTool.begin_connector_swing_drag failed: #{error.message}"
         puts error.backtrace.join("\n")
-        ::UI.messagebox("Could not swing this connector. Check the Ruby Console for details.")
+        @connector_swing_session = nil
+        ::UI.messagebox("Could not start connector swing. Check the Ruby Console for details.")
+        false
+      end
+
+      def update_connector_swing_drag(view, x, y)
+        return false unless @connector_swing_session
+
+        result = Services::ConnectorSwingService.update_drag(
+          session: @connector_swing_session,
+          view: view,
+          x: x,
+          y: y
+        )
+
+        if result[:status] == :ok
+          Sketchup.status_text =
+            "Connector swing: #{result[:angle_degrees]} degrees (#{Services::ConnectorSwingService::DRAG_SNAP_DEGREES}-degree snap)."
+          view.invalidate if view
+          true
+        else
+          @connector_swing_session = nil
+          ::UI.messagebox("Could not continue connector swing. The change was rolled back.")
+          false
+        end
+      rescue => error
+        puts "DuctTool.update_connector_swing_drag failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        cancel_connector_swing_drag
+        false
+      end
+
+      def finish_connector_swing_drag(view = nil)
+        return false unless @connector_swing_session
+
+        session = @connector_swing_session
+        @connector_swing_session = nil
+
+        result = Services::ConnectorSwingService.finish_drag(session, legacy_click: true)
+
+        if result[:status] == :ok
+          @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
+          Sketchup.status_text = "Connector swung to #{result[:angle_degrees]} degrees."
+          view.invalidate if view
+          true
+        else
+          ::UI.messagebox("Could not finish connector swing. The change was rolled back.")
+          false
+        end
+      rescue => error
+        puts "DuctTool.finish_connector_swing_drag failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        Services::ConnectorSwingService.cancel_drag(session) if defined?(session) && session
+        false
+      end
+
+      def cancel_connector_swing_drag(view = nil)
+        session = @connector_swing_session
+        @connector_swing_session = nil
+        return false unless session
+
+        Services::ConnectorSwingService.cancel_drag(session)
+        @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
+        update_status_for_current_shape
+        view.invalidate if view
+        true
+      rescue => error
+        puts "DuctTool.cancel_connector_swing_drag failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        false
+      end
+
+      # Kept for code that still calls the old one-click helper directly.
+      def handle_connector_swing_click(view, x, y)
+        return unless begin_connector_swing_drag(view, x, y)
+
+        finish_connector_swing_drag(view)
       end
 
       def handle_end_tee_click(view, x, y, point)
@@ -215,7 +289,13 @@ module DuctExtension
           network: @network,
           pipe_piece: pipe_piece,
           tap_point: point,
-          branch_direction: branch_direction
+          branch_direction: branch_direction,
+          branch_dimensions: {
+            shape: @duct_shape,
+            diameter: @current_diameter,
+            width: @current_width,
+            height: @current_height
+          }
         )
 
         unless result
@@ -263,6 +343,12 @@ module DuctExtension
           click_point: clicked_point,
           active_start_point: start,
           active_start_port: @last_port,
+          active_dimensions: {
+            shape: @duct_shape,
+            diameter: @current_diameter,
+            width: @current_width,
+            height: @current_height
+          },
           requested_branch_direction: requested_branch_direction
         )
       end

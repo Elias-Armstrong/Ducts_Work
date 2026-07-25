@@ -39,11 +39,9 @@ module DuctExtension
 
       private_class_method :build_round
       private_class_method :build_rectangular
-      private_class_method :build_rectangular_to_round_wye_body
       private_class_method :build_rectangular_to_rectangular_wye_body
       private_class_method :rectangular_union_wye_layout
       private_class_method :add_sheet_metal_break_lines
-      private_class_method :add_round_branch_saddle_edges
       private_class_method :add_round_wye_hub
       private_class_method :hide_round_wye_internal_edges
       private_class_method :add_round_socket_ring
@@ -51,9 +49,6 @@ module DuctExtension
       private_class_method :rectangle_corners
       private_class_method :add_profile_outline_edges
       private_class_method :profile_indices_for_edge
-      private_class_method :clean_round_branch_visual_edges
-      private_class_method :clean_round_branch_entry_artifacts
-      private_class_method :add_ring_edges
       private_class_method :add_visible_edge
       private_class_method :point_from_offsets
       private_class_method :cleanup_2d_profile

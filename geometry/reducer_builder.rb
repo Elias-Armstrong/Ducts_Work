@@ -23,7 +23,18 @@ module DuctExtension
         end_dimensions = normalize_dimensions(end_dimensions)
 
         return false unless start_dimensions && end_dimensions
-        return false unless start_dimensions[:shape] == end_dimensions[:shape]
+
+        if start_dimensions[:shape] != end_dimensions[:shape]
+          return MixedTransitionBuilder.build_into(
+            group,
+            start_point,
+            end_point,
+            start_dimensions: start_dimensions,
+            end_dimensions: end_dimensions,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis
+          )
+        end
 
         if start_dimensions[:shape] == :rectangular
           build_rectangular(
@@ -64,6 +75,12 @@ module DuctExtension
           end_dimensions[:width],
           end_dimensions[:height]
         ].compact.map(&:to_f).max
+
+        if start_dimensions[:shape] != end_dimensions[:shape]
+          # Mixed rectangular/round takeoffs should look like a compact
+          # sheet-metal transition, not a long inline reducer.
+          return [largest * 0.75, 4.0].max
+        end
 
         delta =
           if start_dimensions[:shape] == :rectangular
@@ -244,6 +261,7 @@ module DuctExtension
         puts error.backtrace.join("\n")
         false
       end
+
 
       def self.reducer_collar_length(total_length:, start_size:, end_size:)
         total_length = total_length.to_f

@@ -22,13 +22,6 @@ module DuctExtension
       RECTANGULAR_OPENING_CLEARANCE = 0.001
       RECTANGULAR_MIN_OPENING_SPAN_FACTOR = 0.38
 
-      ROUND_BRANCH_SIDEWALL_OVERLAP_FACTOR = 0.88
-      ROUND_BRANCH_VISIBLE_PROTRUSION_FACTOR = 1.65
-      ROUND_BRANCH_SADDLE_WIDTH_FACTOR = 1.10
-      ROUND_BRANCH_VISUAL_HIDE_RADIUS_FACTOR = 1.18
-      ROUND_BRANCH_ENTRY_ARTIFACT_FORWARD_FACTOR = 1.25
-      ROUND_BRANCH_ENTRY_ARTIFACT_HEIGHT_FACTOR = 1.00
-      ROUND_BRANCH_ENTRY_ARTIFACT_SIDE_FACTOR = 0.85
 
       def self.socket_depth(diameter_or_width, height = nil)
         if height
@@ -56,24 +49,6 @@ module DuctExtension
         else
           base + diameter_or_width.to_f * ROUND_BRANCH_EXTRA_FACTOR
         end
-      end
-
-      def self.rectangular_round_branch_outlet_distance(main_width, main_height, branch_diameter, branch_axis, side_axis)
-        branch_axis = RectangularFrame.normalized(branch_axis)
-        side_axis = RectangularFrame.normalized(side_axis)
-
-        return branch_outlet_distance(branch_diameter) unless branch_axis && side_axis
-
-        side_component = branch_axis.dot(side_axis).abs
-        side_component = 0.001 if side_component < 0.001
-
-        sidewall_distance = (main_width.to_f / 2.0) / side_component
-        visible_protrusion = branch_diameter.to_f * ROUND_BRANCH_VISIBLE_PROTRUSION_FACTOR
-
-        sidewall_distance + visible_protrusion
-      rescue => error
-        puts "WyeBuilder.rectangular_round_branch_outlet_distance failed: #{error.message}"
-        branch_outlet_distance(branch_diameter)
       end
 
       def self.branch_pullout_distance(width, height = nil)

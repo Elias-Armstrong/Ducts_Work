@@ -37,7 +37,9 @@ module DuctExtension
           point = Geom::Point3d.new(cap_point)
           next unless point.distance(port.point) < Model::Network::CONNECTION_DISTANCE * CONNECTION_TOLERANCE_FACTOR
 
+          boundary_edges = face.edges.to_a
           face.erase!
+          hide_surviving_boundary_edges(boundary_edges)
           removed = true
         end
         removed
@@ -88,8 +90,21 @@ module DuctExtension
         face.set_attribute(DICTIONARY, "duct_cap", true)
         face.set_attribute(DICTIONARY, "tee_cap", true) # legacy compatibility
         face.set_attribute(DICTIONARY, "cap_point", port.point.to_a)
+        face.edges.each { |edge| edge.hidden = false if edge.valid? }
       end
       private_class_method :tag_cap
+
+      # A removed cap can share its perimeter with the fitting body. Erasing only
+      # the face leaves that ring/rectangle visible at the new connection. Keep
+      # shared geometry intact, but hide the surviving cap boundary edges.
+      def hide_surviving_boundary_edges(edges)
+        Array(edges).each do |edge|
+          next unless edge && edge.valid?
+
+          edge.hidden = true
+        end
+      end
+      private_class_method :hide_surviving_boundary_edges
 
       def cap_face?(face)
         face.get_attribute(DICTIONARY, "duct_cap") || face.get_attribute(DICTIONARY, "tee_cap")
