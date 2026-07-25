@@ -18,7 +18,9 @@ module DuctExtension
         click_point:,
         active_start_point:,
         active_start_port: nil,
-        requested_branch_direction: nil
+        requested_branch_direction: nil,
+        preferred_width_axis: nil,
+        preferred_height_axis: nil
       )
         return nil unless pipe_start && pipe_end && click_point && active_start_point
 
@@ -27,6 +29,15 @@ module DuctExtension
 
         pipe_length = main_vector.length
         main_vector.normalize!
+
+        rectangular_basis =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularFrame.basis_for_axis(
+              main_vector,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis
+            )
+          end
 
         clearance = end_clearance_for(dimensions)
         return nil if pipe_length <= clearance * 2.0
@@ -55,7 +66,8 @@ module DuctExtension
           click_center: click_center,
           active_start_point: active_start_point,
           active_direction: active_direction,
-          requested_branch_direction: requested_branch_direction
+          requested_branch_direction: requested_branch_direction,
+          rectangular_basis: rectangular_basis
         )
         return nil if candidates.empty?
 
@@ -66,7 +78,8 @@ module DuctExtension
           active_start_point: active_start_point,
           active_direction: active_direction,
           click_center: click_center,
-          requested_branch_direction: requested_branch_direction
+          requested_branch_direction: requested_branch_direction,
+          rectangular_basis: rectangular_basis
         )
       rescue => error
         puts "TeePlacementCalculator.best_placement failed: #{error.message}"
@@ -92,23 +105,17 @@ module DuctExtension
         tap_point:,
         center:,
         main_vector:,
-        fallback_branch_direction:
+        fallback_branch_direction:,
+        basis: nil
       )
-        basis = Geometry::RectangularFrame.basis_for_axis(main_vector)
+        basis ||= Geometry::RectangularFrame.basis_for_axis(main_vector)
         return Geometry::VectorMath.perpendicularized(fallback_branch_direction, main_vector) unless basis
 
-        radial = Geometry::VectorMath.perpendicularized(center.vector_to(tap_point), main_vector)
-        return Geometry::VectorMath.perpendicularized(fallback_branch_direction, main_vector) unless radial
+        desired = Geometry::VectorMath.perpendicularized(center.vector_to(tap_point), main_vector)
+        desired ||= Geometry::VectorMath.perpendicularized(fallback_branch_direction, main_vector)
+        return nil unless desired
 
-        candidates = [
-          basis[:width_axis],
-          basis[:width_axis].clone.reverse,
-          basis[:height_axis],
-          basis[:height_axis].clone.reverse
-        ]
-
-        best = candidates.max_by { |candidate| candidate.dot(radial) }
-        best && best.clone
+        rectangular_face_directions(basis).max_by { |candidate| candidate.dot(desired) }&.clone
       rescue
         Geometry::VectorMath.perpendicularized(fallback_branch_direction, main_vector)
       end
@@ -126,6 +133,17 @@ module DuctExtension
         center.offset(branch, offset)
       end
 
+      def self.rectangular_face_directions(basis)
+        return [] unless basis
+
+        Geometry::VectorMath.unique_directions([
+          basis[:width_axis],
+          basis[:width_axis]&.clone&.reverse,
+          basis[:height_axis],
+          basis[:height_axis]&.clone&.reverse
+        ].compact)
+      end
+
       def self.socket_depth(dimensions)
         if dimensions[:shape] == :rectangular
           Geometry::RectangularTeeBuilder.socket_depth(dimensions[:width], dimensions[:height])
@@ -133,19 +151,19 @@ module DuctExtension
           Geometry::TeeBuilder.socket_depth(dimensions[:diameter])
         end
       rescue
-        Model::DimensionUtils.largest(dimensions) * FALLBACK_SOCKET_DEPTH_FACTOR
+        Model::DuctDimensions.coerce(dimensions).largest * FALLBACK_SOCKET_DEPTH_FACTOR
       end
 
       def self.end_clearance_for(dimensions)
         [
-          Model::DimensionUtils.largest(dimensions) * MIN_END_CLEARANCE_FACTOR,
+          Model::DuctDimensions.coerce(dimensions).largest * MIN_END_CLEARANCE_FACTOR,
           MIN_END_CLEARANCE_ABSOLUTE
         ].max
       end
 
       def self.max_tee_slide_for(dimensions)
         [
-          Model::DimensionUtils.largest(dimensions) * MAX_TEE_SLIDE_FACTOR,
+          Model::DuctDimensions.coerce(dimensions).largest * MAX_TEE_SLIDE_FACTOR,
           MAX_TEE_SLIDE_ABSOLUTE
         ].max
       end
@@ -159,7 +177,8 @@ module DuctExtension
         click_center:,
         active_start_point:,
         active_direction:,
-        requested_branch_direction:
+        requested_branch_direction:,
+        rectangular_basis: nil
       )
         candidates = [{ center: click_center, source: :click_center }]
 
@@ -168,7 +187,8 @@ module DuctExtension
           main_vector: main_vector,
           center: click_center,
           active_start_point: active_start_point,
-          requested_branch_direction: requested_branch_direction
+          requested_branch_direction: requested_branch_direction,
+          rectangular_basis: rectangular_basis
         ).each do |branch_vector|
           aligned = active_line_aligned_center(
             pipe_start: pipe_start,
@@ -180,7 +200,8 @@ module DuctExtension
             max_slide: max_tee_slide_for(dimensions),
             active_start_point: active_start_point,
             active_direction: active_direction,
-            branch_vector: branch_vector
+            branch_vector: branch_vector,
+            rectangular_basis: rectangular_basis
           )
           candidates << aligned if aligned
         end
@@ -199,7 +220,8 @@ module DuctExtension
         max_slide:,
         active_start_point:,
         active_direction:,
-        branch_vector:
+        branch_vector:,
+        rectangular_basis: nil
       )
         active_direction = Geometry::VectorMath.normalized(active_direction)
         branch_vector = Geometry::VectorMath.normalized(branch_vector)
@@ -208,7 +230,8 @@ module DuctExtension
         socket_offset = socket_offset_vector(
           branch_vector: branch_vector,
           dimensions: dimensions,
-          main_vector: main_vector
+          main_vector: main_vector,
+          rectangular_basis: rectangular_basis
         )
         return nil unless socket_offset
 
@@ -255,7 +278,8 @@ module DuctExtension
         active_start_point:,
         active_direction:,
         click_center:,
-        requested_branch_direction:
+        requested_branch_direction:,
+        rectangular_basis: nil
       )
         best = nil
         best_score = nil
@@ -273,7 +297,8 @@ module DuctExtension
                 main_vector: main_vector,
                 center: center,
                 active_start_point: active_start_point,
-                requested_branch_direction: requested_branch_direction
+                requested_branch_direction: requested_branch_direction,
+                rectangular_basis: rectangular_basis
               )
             end
 
@@ -286,7 +311,8 @@ module DuctExtension
               center: center,
               branch_vector: branch_vector,
               dimensions: dimensions,
-              main_vector: main_vector
+              main_vector: main_vector,
+              rectangular_basis: rectangular_basis
             )
             next unless socket_point
             next if socket_point.distance(active_start_point) < MIN_BRANCH_LENGTH
@@ -358,14 +384,16 @@ module DuctExtension
         main_vector:,
         center:,
         active_start_point:,
-        requested_branch_direction:
+        requested_branch_direction:,
+        rectangular_basis: nil
       )
         if dimensions[:shape] == :rectangular
           rectangular_branch_vector_candidates(
             main_vector: main_vector,
             center: center,
             active_start_point: active_start_point,
-            requested_branch_direction: requested_branch_direction
+            requested_branch_direction: requested_branch_direction,
+            basis: rectangular_basis
           )
         else
           round_branch_vector_candidates(
@@ -404,38 +432,30 @@ module DuctExtension
         main_vector:,
         center:,
         active_start_point:,
-        requested_branch_direction:
+        requested_branch_direction:,
+        basis: nil
       )
-        basis = Geometry::RectangularFrame.basis_for_axis(main_vector)
+        basis ||= Geometry::RectangularFrame.basis_for_axis(main_vector)
         unless basis
           fallback = Geometry::VectorMath.perpendicularized(requested_branch_direction, main_vector)
           return fallback ? [fallback] : []
         end
 
         toward_active = Geometry::VectorMath.perpendicularized(center.vector_to(active_start_point), main_vector)
-        side_vectors = [
-          basis[:width_axis],
-          basis[:width_axis].clone.reverse,
-          basis[:height_axis],
-          basis[:height_axis].clone.reverse
-        ]
-        side_vectors.sort_by! { |candidate| -candidate.dot(toward_active) } if toward_active
-
         requested = Geometry::VectorMath.perpendicularized(requested_branch_direction, main_vector)
-        candidates = []
-        candidates << requested if requested
-        candidates << requested.clone.reverse if requested
-        candidates.concat(side_vectors)
+        desired = toward_active || requested
 
-        Geometry::VectorMath.unique_directions(candidates)
+        side_vectors = rectangular_face_directions(basis)
+        side_vectors.sort_by! { |candidate| -candidate.dot(desired) } if desired
+        side_vectors
       end
       private_class_method :rectangular_branch_vector_candidates
 
-      def self.branch_socket_point(center:, branch_vector:, dimensions:, main_vector:)
+      def self.branch_socket_point(center:, branch_vector:, dimensions:, main_vector:, rectangular_basis: nil)
         depth = socket_depth(dimensions)
 
         if dimensions[:shape] == :rectangular
-          basis = Geometry::RectangularFrame.basis_for_axis(main_vector)
+          basis = rectangular_basis || Geometry::RectangularFrame.basis_for_axis(main_vector)
           branch_base = basis ? rectangular_branch_base_point(
             center: center,
             branch_vector: branch_vector,
@@ -449,7 +469,7 @@ module DuctExtension
       end
       private_class_method :branch_socket_point
 
-      def self.socket_offset_vector(branch_vector:, dimensions:, main_vector:)
+      def self.socket_offset_vector(branch_vector:, dimensions:, main_vector:, rectangular_basis: nil)
         branch_vector = Geometry::VectorMath.normalized(branch_vector)
         return nil unless branch_vector
 
@@ -457,7 +477,7 @@ module DuctExtension
         vector_length = depth
 
         if dimensions[:shape] == :rectangular
-          basis = Geometry::RectangularFrame.basis_for_axis(main_vector)
+          basis = rectangular_basis || Geometry::RectangularFrame.basis_for_axis(main_vector)
           if basis
             width_dot = branch_vector.dot(basis[:width_axis]).abs
             height_dot = branch_vector.dot(basis[:height_axis]).abs

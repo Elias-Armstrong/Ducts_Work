@@ -110,8 +110,8 @@ module DuctExtension
         return nil unless selected_port && external_port && selected_port.point && external_port.point
 
         network.disconnect_ports(selected_port, external_port)
-        TeeInsertService.remove_cap_for_port(selected_port)
-        TeeInsertService.remove_cap_for_port(external_port)
+        PortCapService.remove(selected_port)
+        PortCapService.remove(external_port)
 
         start_point = external_port.point
         end_point = selected_port.point

@@ -87,33 +87,6 @@ module DuctExtension
         nil
       end
 
-      # Compatibility helper.
-      #
-      # Earlier versions tried to force a legal X/Y roll here. That caused the
-      # bad swiveling. Now this simply follows stable_basis_for_axis so connected
-      # rectangular ducts keep their start-port orientation.
-      def self.legal_roll_basis_for_axis(
-        axis,
-        width = nil,
-        height = nil,
-        preferred_width_axis: nil,
-        preferred_height_axis: nil,
-        world_up: WORLD_Z
-      )
-        stable_basis_for_axis(
-          axis,
-          width,
-          height,
-          preferred_width_axis: preferred_width_axis,
-          preferred_height_axis: preferred_height_axis,
-          world_up: world_up,
-          allow_relevel: true
-        )
-      rescue => error
-        puts "RectangularFrame.legal_roll_basis_for_axis failed: #{error.message}"
-        nil
-      end
-
       def self.relevel_basis_for_axis(main_axis, width_value, height_value, world_up: WORLD_Z)
         main_axis = normalized(main_axis)
         world_up = normalized(world_up)
@@ -303,27 +276,6 @@ module DuctExtension
           basis[:height_axis],
           width,
           height
-        )
-      end
-
-      def self.legal_roll_rectangle_corners(
-        center,
-        axis,
-        width,
-        height,
-        preferred_width_axis: nil,
-        preferred_height_axis: nil,
-        world_up: WORLD_Z
-      )
-        stable_rectangle_corners(
-          center,
-          axis,
-          width,
-          height,
-          preferred_width_axis: preferred_width_axis,
-          preferred_height_axis: preferred_height_axis,
-          world_up: world_up,
-          allow_relevel: true
         )
       end
 

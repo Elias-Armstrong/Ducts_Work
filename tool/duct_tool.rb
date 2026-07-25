@@ -128,9 +128,9 @@ module DuctExtension
         end
 
         @duct_shape = normalize_shape(input[0])
-        @current_diameter = positive_number(input[1], @current_diameter)
-        @current_width = positive_number(input[2], @current_width)
-        @current_height = positive_number(input[3], @current_height)
+        @current_diameter = InputHelpers.positive_number(input[1], @current_diameter)
+        @current_width = InputHelpers.positive_number(input[2], @current_width)
+        @current_height = InputHelpers.positive_number(input[3], @current_height)
         @length_increment = normalize_increment(input[4])
 
         if @duct_shape == :round
@@ -345,7 +345,7 @@ module DuctExtension
         snapped_port = snap&.port
 
         if snapped_port
-          Services::TeeInsertService.remove_cap_for_port(snapped_port)
+          Services::PortCapService.remove(snapped_port)
           point = snapped_port.point
           copy_dimensions_from_port(snapped_port)
           puts "Orthogonal DuctTool snapped to #{snapped_port.piece.type} port at #{snapped_port.point}"
@@ -354,7 +354,7 @@ module DuctExtension
         end
 
         if @last_port || @start_point
-          Services::TeeInsertService.remove_cap_for_port(@last_port) if @last_port
+          Services::PortCapService.remove(@last_port) if @last_port
 
           route_start = active_route_start_point
           build_point = point

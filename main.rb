@@ -32,7 +32,6 @@ require_relative 'geometry/vector_math'
 
 # ===== MODEL =====
 require_relative 'model/duct_dimensions'
-require_relative 'model/dimension_utils'
 require_relative 'model/port'
 require_relative 'model/build_step'
 require_relative 'model/duct_piece'
@@ -60,6 +59,7 @@ require_relative 'services/piece_metadata_service'
 require_relative 'services/network_rebuild_service'
 require_relative 'services/network_validator'
 require_relative 'services/model_operation'
+require_relative 'services/port_cap_service'
 require_relative 'services/network_clear_service'
 require_relative 'services/geometry_cleanup_service'
 require_relative 'services/visual_style_service'
@@ -92,9 +92,9 @@ require_relative 'services/routing/strategies/one_elbow_strategy'
 require_relative 'services/routing/strategies/dogleg_strategy'
 require_relative 'services/routing/strategy_pipeline'
 require_relative 'services/port_to_port_route_service'
-require_relative 'services/rectangular_endpoint_relief_service'
 
 # ===== TOOL =====
+require_relative 'tool/input_helpers'
 require_relative 'tool/reducer_prompt'
 require_relative 'tool/duct_tool_menu'
 require_relative 'tool/duct_tool_typed_length'
@@ -107,6 +107,7 @@ require_relative 'tool/duct_tool'
 require_relative 'tool/reducer_tool'
 
 # ===== UI =====
+require_relative 'ui/actions'
 require_relative 'ui/toolbar'
 DuctExtension::Toolbar.create
 
@@ -114,42 +115,10 @@ module CustomDuctExtension
   unless @simple_duct_menu_created
     menu = UI.menu("Plugins").add_submenu("Simple Duct Extension")
 
-    menu.add_item("Draw Orthogonal Duct") {
-      Sketchup.active_model.select_tool(DuctExtension::Tool::DuctTool.new)
-    }
-
-    menu.add_item("Resize Selected Duct Pieces") {
-      network = DuctExtension.network_for_model(Sketchup.active_model)
-
-      DuctExtension::Services::SelectionResizeService.run(
-        model: Sketchup.active_model,
-        network: network
-      )
-    }
-
-    menu.add_item("Add Increaser / Reducer") {
-      Sketchup.active_model.select_tool(DuctExtension::Tool::ReducerTool.new)
-    }
-
-    menu.add_item("Clear Duct Data") {
-      result = UI.messagebox(
-        "This will clear all stored duct connection data from this model for performance purposes.\n\n" \
-        "The 3D duct geometry will remain unchanged, but old ducts will no longer snap as editable duct pieces.\n\n" \
-        "Continue?",
-        MB_YESNO
-      )
-
-      if result == IDYES
-        network = DuctExtension.network_for_model(Sketchup.active_model)
-
-        DuctExtension::Services::NetworkClearService.clear_model_data(
-          Sketchup.active_model,
-          network
-        )
-
-        UI.messagebox("Duct data cleared. Geometry was left unchanged.")
-      end
-    }
+    menu.add_item("Draw Orthogonal Duct") { DuctExtension::UIActions.draw_duct }
+    menu.add_item("Resize Selected Duct Pieces") { DuctExtension::UIActions.resize_selection }
+    menu.add_item("Add Increaser / Reducer") { DuctExtension::UIActions.add_reducer }
+    menu.add_item("Clear Duct Data") { DuctExtension::UIActions.clear_duct_data }
 
     @simple_duct_menu_created = true
     file_loaded(__FILE__) unless file_loaded?(__FILE__)

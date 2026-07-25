@@ -135,7 +135,7 @@ module DuctExtension
 
         network.connect_ports(stem_port, reducer_start_port)
 
-        TeeInsertService.remove_cap_for_port(stem_port)
+        PortCapService.remove(stem_port)
 
         network.rebuild_index! if network.respond_to?(:rebuild_index!)
 

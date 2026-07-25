@@ -414,7 +414,7 @@ module DuctExtension
       end
 
       def self.largest_dimension(dimensions)
-        Model::DimensionUtils.largest(dimensions)
+        Model::DuctDimensions.coerce(dimensions).largest
       end
 
       def self.normalized(vector)

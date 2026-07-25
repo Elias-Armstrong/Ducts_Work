@@ -27,7 +27,9 @@ module DuctExtension
           click_point: click_point,
           active_start_point: active_start_point,
           active_start_port: active_start_port,
-          requested_branch_direction: requested_branch_direction
+          requested_branch_direction: requested_branch_direction,
+          preferred_width_axis: port_a.width_axis || port_b.width_axis,
+          preferred_height_axis: port_a.height_axis || port_b.height_axis
         )
         return nil unless placement
 

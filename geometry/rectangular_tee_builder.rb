@@ -8,6 +8,39 @@ module DuctExtension
         [width.to_f, height.to_f].max * SOCKET_DEPTH_FACTOR
       end
 
+      # The branch shell and the branch Port must use the exact same frame.
+      # Width follows the main run; height is the remaining perpendicular axis.
+      def self.branch_basis(main_axis, branch_axis, main_basis: nil)
+        main_axis = VectorMath.normalized(main_axis)
+        branch_axis = VectorMath.normalized(branch_axis)
+        return nil unless main_axis && branch_axis
+
+        width_axis = VectorMath.perpendicularized(main_axis, branch_axis)
+        return nil unless width_axis
+
+        height_axis = branch_axis.cross(width_axis)
+        return nil if height_axis.length <= EPSILON
+        height_axis.normalize!
+
+        if main_basis
+          remaining_axis =
+            if branch_axis.dot(main_basis[:width_axis]).abs >= branch_axis.dot(main_basis[:height_axis]).abs
+              main_basis[:height_axis]
+            else
+              main_basis[:width_axis]
+            end
+
+          if remaining_axis && height_axis.dot(remaining_axis) < 0.0
+            width_axis.reverse!
+            height_axis.reverse!
+          end
+        end
+
+        { axis: branch_axis, width_axis: width_axis, height_axis: height_axis }
+      rescue
+        nil
+      end
+
       # Build a robust rectangular T from two open rectangular duct shells.
       # The caller already owns the topology/ports; this builder only creates
       # geometry at the exact socket locations supplied by the insertion service.
@@ -74,11 +107,8 @@ module DuctExtension
         )
         return false unless main_ok
 
-        # Across the branch opening, the main-run axis is the most stable width
-        # reference. The cross product supplies a perpendicular height axis.
-        branch_width_axis = VectorMath.perpendicularized(main_axis, branch_axis)
-        branch_height_axis = branch_axis.cross(branch_width_axis) if branch_width_axis
-        branch_height_axis.normalize! if branch_height_axis && branch_height_axis.length > EPSILON
+        branch_basis = self.branch_basis(main_axis, branch_axis, main_basis: main_basis)
+        return false unless branch_basis
 
         RectangularPipeBuilder.build_into(
           group,
@@ -88,8 +118,8 @@ module DuctExtension
           height,
           cap_start: false,
           cap_end: false,
-          preferred_width_axis: branch_width_axis,
-          preferred_height_axis: branch_height_axis,
+          preferred_width_axis: branch_basis[:width_axis],
+          preferred_height_axis: branch_basis[:height_axis],
           allow_relevel: false
         )
       rescue => error

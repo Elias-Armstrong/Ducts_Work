@@ -1,13 +1,6 @@
 module DuctExtension
   module Services
     class PortToPortRouteService
-      # Compatibility constants retained for callers that may reference them.
-      MIN_ROUTE_LENGTH = Routing::RouteMath::MIN_ROUTE_LENGTH
-      DIRECTION_MATCH_DOT = Routing::RouteMath::DIRECTION_MATCH_DOT
-      TARGET_ALIGNMENT_DOT = Routing::RouteMath::TARGET_ALIGNMENT_DOT
-      DEFAULT_BEND_RADIUS_FACTOR = Routing::RouteMath::DEFAULT_BEND_RADIUS_FACTOR
-      TWO_TERMINAL_MISS_TOLERANCE = Routing::RouteMath::TWO_TERMINAL_MISS_TOLERANCE
-
       def self.connect(
         model:,
         network:,
@@ -50,7 +43,7 @@ module DuctExtension
           reducer_length = passive_reducer_length(dimensions, target_dimensions)
           target_incoming_vector = Geometry::VectorMath.normalized(target_port.outward_vector.clone.reverse)
 
-          if target_incoming_vector && reducer_length > MIN_ROUTE_LENGTH
+          if target_incoming_vector && reducer_length > Routing::RouteMath::MIN_ROUTE_LENGTH
             # Preserve the existing port-vector convention used by the working
             # passive-reducer implementation.
             reducer_start_point = target_port.point.offset(target_incoming_vector.clone.reverse, reducer_length)

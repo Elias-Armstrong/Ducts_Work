@@ -131,7 +131,7 @@ module DuctExtension
 
         round_builder.socket_depth(dimensions[:diameter])
       rescue
-        Model::DimensionUtils.largest(dimensions) * fallback_factor.to_f
+        Model::DuctDimensions.coerce(dimensions).largest * fallback_factor.to_f
       end
 
       # Shared topology/metadata finalization for end fittings. Geometry remains
@@ -147,10 +147,10 @@ module DuctExtension
         PieceMetadataService.save_piece(piece)
         network.connect_ports(original_stem_port, fitting_stem_port)
 
-        TeeInsertService.remove_cap_for_port(original_stem_port)
+        PortCapService.remove(original_stem_port)
 
         Array(outlet_ports).compact.each do |port|
-          TeeInsertService.send(:add_cap_for_port, piece.group, port)
+          PortCapService.add(piece.group, port)
         end
 
         network.rebuild_index! if network.respond_to?(:rebuild_index!)

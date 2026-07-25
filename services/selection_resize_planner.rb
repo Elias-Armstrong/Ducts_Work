@@ -13,7 +13,7 @@ module DuctExtension
 
       def self.common_shape_for(pieces)
         shapes = pieces.flat_map do |piece|
-          Array(piece.ports).map { |port| Model::Port.normalize_shape_value(port.shape) }
+          Array(piece.ports).map { |port| Model::DuctDimensions.normalize_shape(port.shape) }
         end.compact.uniq
 
         return nil if shapes.empty? || shapes.length > 1
@@ -36,8 +36,8 @@ module DuctExtension
           )
           return nil unless input
 
-          width = positive_number_or_nil(input[0])
-          height = positive_number_or_nil(input[1])
+          width = Model::DuctDimensions.positive_number(input[0], nil)
+          height = Model::DuctDimensions.positive_number(input[1], nil)
           unless width && height
             UI.messagebox("Please enter a valid width and height.")
             return nil
@@ -53,7 +53,7 @@ module DuctExtension
           )
           return nil unless input
 
-          diameter = positive_number_or_nil(input[0])
+          diameter = Model::DuctDimensions.positive_number(input[0], nil)
           unless diameter
             UI.messagebox("Please enter a valid diameter.")
             return nil
@@ -78,13 +78,6 @@ module DuctExtension
         Model::DuctDimensions.round
       end
 
-      def self.positive_number_or_nil(value)
-        number = value.to_f
-        number > 0.0 ? number : nil
-      rescue
-        nil
-      end
-      private_class_method :positive_number_or_nil
     end
   end
 end

@@ -121,7 +121,7 @@ module DuctExtension
           next unless port && port.point
 
           begin
-            DuctExtension::Services::TeeInsertService.add_cap_for_port(group, port)
+            DuctExtension::Services::PortCapService.add(group, port)
           rescue
             nil
           end

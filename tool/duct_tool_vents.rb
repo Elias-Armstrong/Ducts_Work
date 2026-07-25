@@ -141,10 +141,10 @@ module DuctExtension
             "End Cover Diameter:"
           ],
           [
-            format_number(diameter * 1.35),
-            format_number(diameter * 0.55),
+            InputHelpers.format_number(diameter * 1.35),
+            InputHelpers.format_number(diameter * 0.55),
             "Yes",
-            format_number(diameter * 1.22)
+            InputHelpers.format_number(diameter * 1.22)
           ],
           ["", "", "Yes|No", ""],
           "Round Duct Vent"
@@ -153,10 +153,10 @@ module DuctExtension
         return nil unless input
 
         {
-          register_width: positive_number(input[0], diameter * 1.35),
-          register_height: positive_number(input[1], diameter * 0.55),
-          register_bumped_out: yes_value?(input[2]),
-          cover_diameter: positive_number(input[3], diameter * 1.22),
+          register_width: InputHelpers.positive_number(input[0], diameter * 1.35),
+          register_height: InputHelpers.positive_number(input[1], diameter * 0.55),
+          register_bumped_out: InputHelpers.yes?(input[2]),
+          cover_diameter: InputHelpers.positive_number(input[3], diameter * 1.22),
           cover_width: nil,
           cover_height: nil
         }
@@ -176,11 +176,11 @@ module DuctExtension
             "End Cover Height:"
           ],
           [
-            format_number(largest * 1.10),
-            format_number(largest * 0.45),
+            InputHelpers.format_number(largest * 1.10),
+            InputHelpers.format_number(largest * 0.45),
             "Yes",
-            format_number(width * 1.22),
-            format_number(height * 1.22)
+            InputHelpers.format_number(width * 1.22),
+            InputHelpers.format_number(height * 1.22)
           ],
           ["", "", "Yes|No", "", ""],
           "Rectangular Duct Vent"
@@ -189,28 +189,15 @@ module DuctExtension
         return nil unless input
 
         {
-          register_width: positive_number(input[0], largest * 1.10),
-          register_height: positive_number(input[1], largest * 0.45),
-          register_bumped_out: yes_value?(input[2]),
+          register_width: InputHelpers.positive_number(input[0], largest * 1.10),
+          register_height: InputHelpers.positive_number(input[1], largest * 0.45),
+          register_bumped_out: InputHelpers.yes?(input[2]),
           cover_diameter: nil,
-          cover_width: positive_number(input[3], width * 1.22),
-          cover_height: positive_number(input[4], height * 1.22)
+          cover_width: InputHelpers.positive_number(input[3], width * 1.22),
+          cover_height: InputHelpers.positive_number(input[4], height * 1.22)
         }
       end
 
-      def yes_value?(value)
-        %w[yes y true 1].include?(value.to_s.strip.downcase)
-      rescue
-        true
-      end
-
-      def format_number(value)
-        number = value.to_f
-        rounded = number.round(3)
-        (rounded - rounded.round).abs < 0.001 ? rounded.round.to_s : rounded.to_s
-      rescue
-        value.to_s
-      end
     end
   end
 end

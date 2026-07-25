@@ -30,8 +30,8 @@ module DuctExtension
           )
           return nil unless input
 
-          diameter = positive(input[1])
-          length = positive(input[2], 0.0)
+          diameter = InputHelpers.positive_number(input[1])
+          length = InputHelpers.positive_number(input[2], 0.0)
           return invalid("Please enter a valid new diameter.") unless diameter
           return invalid("The new diameter must be different from the current diameter.") if
             (diameter - dimensions[:diameter].to_f).abs <= 0.001
@@ -65,9 +65,9 @@ module DuctExtension
           )
           return nil unless input
 
-          width = positive(input[2])
-          height = positive(input[3])
-          length = positive(input[4], 0.0)
+          width = InputHelpers.positive_number(input[2])
+          height = InputHelpers.positive_number(input[3])
+          length = InputHelpers.positive_number(input[4], 0.0)
           return invalid("Please enter a valid new width and height.") unless width && height
 
           changed =
@@ -83,13 +83,6 @@ module DuctExtension
 
         def length_default(default_length)
           @last_length.to_f > 0.0 ? @last_length.to_s : default_length.round(2).to_s
-        end
-
-        def positive(value, fallback = nil)
-          number = value.to_f
-          number > 0.0 ? number : fallback
-        rescue
-          fallback
         end
 
         def invalid(message)

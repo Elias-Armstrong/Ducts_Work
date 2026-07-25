@@ -102,29 +102,6 @@ module DuctExtension
         nil
       end
 
-      def self.legal_transport_basis(
-        from_axis:,
-        to_axis:,
-        width_axis:,
-        height_axis: nil,
-        width: nil,
-        height: nil,
-        world_up: WORLD_Z
-      )
-        stable_transport_basis(
-          from_axis: from_axis,
-          to_axis: to_axis,
-          width_axis: width_axis,
-          height_axis: height_axis,
-          width: width,
-          height: height,
-          world_up: world_up,
-          allow_relevel: false
-        )
-      rescue => error
-        puts "RectangularFrame.legal_transport_basis failed: #{error.message}"
-        nil
-      end
 
     end
   end

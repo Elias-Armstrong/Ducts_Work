@@ -268,10 +268,10 @@ module DuctExtension
           input = ::UI.inputbox(prompts, defaults, lists, "End Wye Branch Size")
           return nil unless input
 
-          branch_shape = Model::DimensionUtils.normalize_shape(input[2])
+          branch_shape = Model::DuctDimensions.normalize_shape(input[2])
 
           if branch_shape == :round
-            branch_diameter = Model::DimensionUtils.positive_number(input[3], [dimensions[:width].to_f, dimensions[:height].to_f].max)
+            branch_diameter = Model::DuctDimensions.positive_number(input[3], [dimensions[:width].to_f, dimensions[:height].to_f].max)
             {
               shape: :round,
               diameter: branch_diameter,
@@ -279,8 +279,8 @@ module DuctExtension
               height: branch_diameter
             }
           else
-            branch_width = Model::DimensionUtils.positive_number(input[4], dimensions[:width])
-            branch_height = Model::DimensionUtils.positive_number(input[5], dimensions[:height])
+            branch_width = Model::DuctDimensions.positive_number(input[4], dimensions[:width])
+            branch_height = Model::DuctDimensions.positive_number(input[5], dimensions[:height])
             {
               shape: :rectangular,
               diameter: [branch_width, branch_height].max,
@@ -294,7 +294,7 @@ module DuctExtension
           input = ::UI.inputbox(prompts, defaults, [], "End Wye Branch Size")
           return nil unless input
 
-          branch_diameter = Model::DimensionUtils.positive_number(input[1], dimensions[:diameter])
+          branch_diameter = Model::DuctDimensions.positive_number(input[1], dimensions[:diameter])
 
           {
             shape: :round,

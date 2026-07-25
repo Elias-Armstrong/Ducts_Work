@@ -176,7 +176,7 @@ module DuctExtension
         return false unless build_point
         return false if start.distance(build_point) < PREVIEW_MIN_LENGTH
 
-        Services::TeeInsertService.remove_cap_for_port(@last_port) if @last_port
+        Services::PortCapService.remove(@last_port) if @last_port
 
         steps = Services::RoutePlanner.plan(
           network: @network,

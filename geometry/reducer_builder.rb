@@ -338,7 +338,7 @@ module DuctExtension
       def self.normalize_dimensions(dimensions)
         return nil unless dimensions
 
-        shape = Model::Port.normalize_shape_value(dimensions[:shape] || dimensions["shape"])
+        shape = Model::DuctDimensions.normalize_shape(dimensions[:shape] || dimensions["shape"])
 
         if shape == :rectangular
           width = positive(dimensions[:width] || dimensions["width"])

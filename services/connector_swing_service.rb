@@ -328,7 +328,7 @@ module DuctExtension
 
       def self.rectangular_piece?(piece)
         Array(piece.ports).any? do |port|
-          port && Model::Port.normalize_shape_value(port.shape) == :rectangular
+          port && Model::DuctDimensions.normalize_shape(port.shape) == :rectangular
         end
       rescue
         false

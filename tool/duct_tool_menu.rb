@@ -125,7 +125,7 @@ module DuctExtension
         interval_menu = repeat_menu.add_submenu("Interval")
 
         [12.0, 18.0, 24.0, 30.0, 36.0, 48.0].each do |interval|
-          interval_menu.add_item("#{format_number(interval)} inches") {
+          interval_menu.add_item("#{InputHelpers.format_number(interval)} inches") {
             set_duct_tool_class_setting(:@@vent_repeat_interval, interval)
             Sketchup.status_text = vent_repeat_status_text
           }
@@ -151,7 +151,7 @@ module DuctExtension
 
       def vent_repeat_status_text
         direction = duct_tool_class_setting(:@@vent_repeat_direction) == :left ? "left" : "right"
-        "Vent repeat #{duct_tool_class_setting(:@@vent_repeat_enabled) ? 'on' : 'off'}: #{format_number(duct_tool_class_setting(:@@vent_repeat_interval))} inches to the #{direction}."
+        "Vent repeat #{duct_tool_class_setting(:@@vent_repeat_enabled) ? 'on' : 'off'}: #{InputHelpers.format_number(duct_tool_class_setting(:@@vent_repeat_interval))} inches to the #{direction}."
       rescue
         "Vent repeat updated."
       end
@@ -159,7 +159,7 @@ module DuctExtension
       def prompt_for_vent_repeat_interval
         input = ::UI.inputbox(
           ["Repeat Interval (Inches):"],
-          [format_number(duct_tool_class_setting(:@@vent_repeat_interval))],
+          [InputHelpers.format_number(duct_tool_class_setting(:@@vent_repeat_interval))],
           [],
           "Vent Repeat Interval"
         )
@@ -168,7 +168,7 @@ module DuctExtension
 
         set_duct_tool_class_setting(
           :@@vent_repeat_interval,
-          positive_number(input[0], duct_tool_class_setting(:@@vent_repeat_interval))
+          InputHelpers.positive_number(input[0], duct_tool_class_setting(:@@vent_repeat_interval))
         )
         set_duct_tool_class_setting(:@@vent_repeat_enabled, true)
         Sketchup.status_text = vent_repeat_status_text

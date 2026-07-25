@@ -120,14 +120,6 @@ module DuctExtension
         DuctDimensions.coerce(params || {}, fallback: fallback)
       end
 
-      def self.normalize_shape_value(value)
-        DuctDimensions.normalize_shape(value, default: :round)
-      end
-
-      def self.positive_number_value(value, fallback)
-        DuctDimensions.positive_number(value, fallback)
-      end
-
       private
 
       def dimensions_if_available

@@ -82,11 +82,24 @@ module DuctExtension
         default
       end
 
-      def self.positive_number(value, fallback)
+      def self.positive_number(value, fallback = nil)
         number = value.to_f
-        number > 0.0 ? number : fallback.to_f
+        return number if number > 0.0
+
+        fallback.nil? ? nil : fallback.to_f
       rescue
-        fallback.to_f
+        fallback.nil? ? nil : fallback.to_f
+      end
+
+      def self.max_dimensions(first, second)
+        first = coerce(first)
+        second = coerce(second)
+
+        if first.rectangular? || second.rectangular?
+          rectangular(width: [first.width, second.width].max, height: [first.height, second.height].max)
+        else
+          round(diameter: [first.diameter, second.diameter].max)
+        end
       end
 
       def self.fetch_value(source, key)

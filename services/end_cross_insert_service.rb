@@ -31,7 +31,7 @@ module DuctExtension
         height_axis = frame[:height_axis]
 
         socket_depth = EndFittingSupport.socket_depth(
-          dimensions: Model::DimensionUtils.max_dimensions(dimensions, branch_dimensions),
+          dimensions: Model::DuctDimensions.max_dimensions(dimensions, branch_dimensions),
           round_builder: Geometry::CrossBuilder,
           fallback_factor: FALLBACK_SOCKET_DEPTH_FACTOR
         )
@@ -202,8 +202,8 @@ module DuctExtension
           input = ::UI.inputbox(prompts, defaults, [], "End Cross Branch Size")
           return nil unless input
 
-          branch_width = Model::DimensionUtils.positive_number(input[2], dimensions[:width])
-          branch_height = Model::DimensionUtils.positive_number(input[3], dimensions[:height])
+          branch_width = Model::DuctDimensions.positive_number(input[2], dimensions[:width])
+          branch_height = Model::DuctDimensions.positive_number(input[3], dimensions[:height])
 
           {
             shape: :rectangular,
@@ -217,7 +217,7 @@ module DuctExtension
           input = ::UI.inputbox(prompts, defaults, [], "End Cross Branch Size")
           return nil unless input
 
-          branch_diameter = Model::DimensionUtils.positive_number(input[1], dimensions[:diameter])
+          branch_diameter = Model::DuctDimensions.positive_number(input[1], dimensions[:diameter])
 
           {
             shape: :round,

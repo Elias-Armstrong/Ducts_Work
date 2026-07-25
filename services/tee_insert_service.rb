@@ -1,11 +1,8 @@
 module DuctExtension
   module Services
     class TeeInsertService
-      DICTIONARY = "DuctExtension"
-
       MIN_SEGMENT_LENGTH_FACTOR = 0.5
       FALLBACK_SOCKET_DEPTH_FACTOR = 0.82
-      CAP_SEGMENTS = 32
 
       def self.insert_tee_on_pipe(model:, network:, pipe_piece:, tap_point:, branch_direction:)
         return nil unless pipe_piece
@@ -25,6 +22,16 @@ module DuctExtension
 
         main_vector.normalize!
 
+        rectangular_basis =
+          if dimensions[:shape] == :rectangular
+            basis_for_existing_rectangular_pipe(
+              main_vector: main_vector,
+              port_a: old_port_a,
+              port_b: old_port_b
+            )
+          end
+        return nil if dimensions[:shape] == :rectangular && !rectangular_basis
+
         center = TeePlacementCalculator.project_point_to_segment(
           point: tap_point,
           line_start: point_a,
@@ -38,7 +45,8 @@ module DuctExtension
               tap_point: tap_point,
               center: center,
               main_vector: main_vector,
-              fallback_branch_direction: branch_direction
+              fallback_branch_direction: branch_direction,
+              basis: rectangular_basis
             )
           else
             Geometry::VectorMath.perpendicularized(branch_direction, main_vector)
@@ -52,12 +60,14 @@ module DuctExtension
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
         main_end_socket = center.offset(main_vector, socket_depth)
 
-        min_length = Model::DimensionUtils.largest(dimensions) * MIN_SEGMENT_LENGTH_FACTOR
+        min_length = Model::DuctDimensions.coerce(dimensions).largest * MIN_SEGMENT_LENGTH_FACTOR
 
         return nil if point_a.distance(main_start_socket) < min_length
         return nil if point_b.distance(main_end_socket) < min_length
 
         old_group = pipe_piece.group
+        external_neighbors_a = external_neighbors(network, old_port_a, pipe_piece)
+        external_neighbors_b = external_neighbors(network, old_port_b, pipe_piece)
 
         ModelOperation.run(
           model: model,
@@ -76,7 +86,10 @@ module DuctExtension
             main_vector: main_vector,
             branch_vector: branch_vector,
             dimensions: dimensions,
-            socket_depth: socket_depth
+            socket_depth: socket_depth,
+            rectangular_basis: rectangular_basis,
+            external_neighbors_a: external_neighbors_a,
+            external_neighbors_b: external_neighbors_b
           )
 
           operation.abort!(nil) unless result
@@ -88,6 +101,29 @@ module DuctExtension
         nil
       end
 
+      def self.basis_for_existing_rectangular_pipe(main_vector:, port_a:, port_b:)
+        Geometry::RectangularFrame.basis_for_axis(
+          main_vector,
+          preferred_width_axis: port_a&.width_axis || port_b&.width_axis,
+          preferred_height_axis: port_a&.height_axis || port_b&.height_axis
+        )
+      rescue
+        nil
+      end
+      private_class_method :basis_for_existing_rectangular_pipe
+
+      def self.external_neighbors(network, port, piece)
+        Array(network.connected_ports(port)).select { |other| other && other.piece != piece }
+      rescue
+        []
+      end
+      private_class_method :external_neighbors
+
+      def self.reconnect_neighbors(network, replacement_port, neighbors)
+        Array(neighbors).each { |neighbor| network.connect_ports(replacement_port, neighbor) }
+      end
+      private_class_method :reconnect_neighbors
+
       def self.build_split_pipe_and_tee(
         model:,
         network:,
@@ -97,14 +133,11 @@ module DuctExtension
         main_vector:,
         branch_vector:,
         dimensions:,
-        socket_depth:
+        socket_depth:,
+        rectangular_basis: nil,
+        external_neighbors_a: [],
+        external_neighbors_b: []
       )
-        rectangular_basis =
-          if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.basis_for_axis(main_vector)
-          else
-            nil
-          end
 
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
         main_end_socket = center.offset(main_vector, socket_depth)
@@ -184,9 +217,11 @@ module DuctExtension
 
         branch_basis =
           if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.basis_for_axis(branch_vector)
-          else
-            nil
+            Geometry::RectangularTeeBuilder.branch_basis(
+              main_vector,
+              branch_vector,
+              main_basis: rectangular_basis
+            )
           end
 
         main_start_port = Model::Port.new(
@@ -233,8 +268,10 @@ module DuctExtension
 
         network.connect_ports(pipe_a.ports[1], main_start_port)
         network.connect_ports(pipe_b.ports[0], main_end_port)
+        reconnect_neighbors(network, pipe_a.ports[0], external_neighbors_a)
+        reconnect_neighbors(network, pipe_b.ports[1], external_neighbors_b)
 
-        add_cap_for_port(tee_group, branch_port)
+        PortCapService.add(tee_group, branch_port)
 
         {
           tee_piece: tee_piece,
@@ -344,96 +381,8 @@ module DuctExtension
         piece
       end
 
-      def self.add_cap_for_port(group, port)
-        return unless group && group.valid?
-        return unless port
-
-        if port.rectangular?
-          add_rectangular_cap_for_port(group, port)
-        else
-          add_round_cap_for_port(group, port)
-        end
-      rescue => error
-        puts "TeeInsertService.add_cap_for_port failed: #{error.message}"
-      end
-
-      def self.add_round_cap_for_port(group, port)
-        normal = port.vector.clone
-        return if normal.length == 0
-
-        normal.normalize!
-
-        circle = group.entities.add_circle(
-          port.point,
-          normal,
-          port.diameter.to_f / 2.0,
-          CAP_SEGMENTS
-        )
-
-        face = group.entities.add_face(circle)
-        return unless face
-
-        face.reverse! if face.normal.dot(normal) < 0
-
-        face.set_attribute(DICTIONARY, "tee_cap", true)
-        face.set_attribute(DICTIONARY, "cap_point", port.point.to_a)
-      end
-
-      def self.add_rectangular_cap_for_port(group, port)
-        normal = port.vector.clone
-        return if normal.length == 0
-
-        normal.normalize!
-
-        corners = Geometry::RectangularFrame.rectangle_corners(
-          port.point,
-          normal,
-          port.width,
-          port.height,
-          preferred_width_axis: port.width_axis,
-          preferred_height_axis: port.height_axis
-        )
-
-        return if corners.empty?
-
-        face = group.entities.add_face(corners)
-        return unless face
-
-        face.reverse! if face.normal.dot(normal) < 0
-
-        face.set_attribute(DICTIONARY, "tee_cap", true)
-        face.set_attribute(DICTIONARY, "cap_point", port.point.to_a)
-      end
-
-      def self.remove_cap_for_port(port)
-        return unless port
-        return unless port.piece
-        return unless port.piece.type == :tee
-
-        group = port.piece.group
-        return unless group && group.valid?
-
-        group.entities.grep(Sketchup::Face).each do |face|
-          next unless face.valid?
-          next unless face.get_attribute(DICTIONARY, "tee_cap")
-
-          cap_point = face.get_attribute(DICTIONARY, "cap_point")
-          next unless cap_point
-
-          point = Geom::Point3d.new(cap_point)
-
-          if point.distance(port.point) < Model::Network::CONNECTION_DISTANCE * 4.0
-            face.erase!
-          end
-        end
-      rescue => error
-        puts "TeeInsertService.remove_cap_for_port failed: #{error.message}"
-      end
-
       private_class_method :build_split_pipe_and_tee
       private_class_method :build_pipe_piece
-      private_class_method :add_round_cap_for_port
-      private_class_method :add_rectangular_cap_for_port
     end
   end
 end
