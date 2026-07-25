@@ -13,10 +13,6 @@ module DuctExtension
       def add(group, port)
         return false unless group && group.valid? && port
 
-        # Cap creation must be idempotent. Round caps create a circular edge loop,
-        # so creating the same cap twice can leave coincident SketchUp geometry.
-        return true if cap_exists_at_port?(group, port)
-
         port.rectangular? ? add_rectangular(group, port) : add_round(group, port)
         true
       rescue => error
@@ -51,25 +47,6 @@ module DuctExtension
         puts "PortCapService.remove failed: #{error.message}"
         false
       end
-
-      def cap_exists_at_port?(group, port)
-        tolerance =
-          Model::Network::CONNECTION_DISTANCE * CONNECTION_TOLERANCE_FACTOR
-
-        group.entities.grep(Sketchup::Face).any? do |face|
-          next false unless face.valid?
-          next false unless cap_face?(face)
-
-          cap_point = face.get_attribute(DICTIONARY, "cap_point")
-          next false unless cap_point
-
-          point = Geom::Point3d.new(cap_point)
-          point.distance(port.point) < tolerance
-        end
-      rescue
-        false
-      end
-      private_class_method :cap_exists_at_port?
 
       def add_round(group, port)
         normal = Geometry::VectorMath.normalized(port.vector)

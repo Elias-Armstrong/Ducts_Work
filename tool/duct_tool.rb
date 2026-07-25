@@ -356,7 +356,6 @@ module DuctExtension
         if snapped_port
           Services::PortCapService.remove(snapped_port)
           point = snapped_port.point
-          copy_dimensions_from_port(snapped_port)
           puts "Orthogonal DuctTool snapped to #{snapped_port.piece.type} port at #{snapped_port.point}"
         else
           puts "Orthogonal DuctTool found no open external port snap."

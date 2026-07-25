@@ -153,26 +153,12 @@ module DuctExtension
           ROUND_HUB_SEGMENTS.times do |segment_index|
             next_index = (segment_index + 1) % ROUND_HUB_SEGMENTS
 
-            # Ellipsoid cells are inherently slightly non-planar. Asking
-            # SketchUp to create them as quads lets some cells remain quads while
-            # others are internally/fallback triangulated, which produces uneven
-            # smooth shading. Triangulate every cell the same way instead.
-            Mesh.add_face_safe(
+            Mesh.add_quad(
               entities,
-              [
-                current[segment_index],
-                current[next_index],
-                nxt[next_index]
-              ]
-            )
-
-            Mesh.add_face_safe(
-              entities,
-              [
-                current[segment_index],
-                nxt[next_index],
-                nxt[segment_index]
-              ]
+              current[segment_index],
+              current[next_index],
+              nxt[next_index],
+              nxt[segment_index]
             )
           end
         end

@@ -4,8 +4,9 @@ module DuctExtension
       EPSILON = 0.000001
 
       def self.add_face_safe(entities, points, reverse_if_normal_against: nil)
-        clean_points = Array(points).compact
+        clean_points = sanitize_face_points(points)
         return nil if clean_points.length < 3
+        return nil if duplicate_face_point?(clean_points)
 
         face = entities.add_face(clean_points)
         return nil unless face
@@ -22,6 +23,35 @@ module DuctExtension
       rescue => error
         puts "Mesh.add_face_safe failed: #{error.message}"
         nil
+      end
+
+
+      def self.sanitize_face_points(points)
+        result = []
+
+        Array(points).compact.each do |point|
+          next if !result.empty? && same_point?(result.last, point)
+          result << point
+        end
+
+        result.pop if result.length > 1 && same_point?(result.first, result.last)
+        result
+      end
+
+      def self.duplicate_face_point?(points)
+        points.each_with_index do |point, index|
+          ((index + 1)...points.length).each do |other_index|
+            return true if same_point?(point, points[other_index])
+          end
+        end
+
+        false
+      end
+
+      def self.same_point?(point_a, point_b)
+        point_a.distance(point_b) <= EPSILON
+      rescue
+        point_a == point_b
       end
 
       def self.add_quad(entities, p1, p2, p3, p4)

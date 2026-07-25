@@ -168,20 +168,12 @@ module DuctExtension
             ports: [forward_port, native_branch_port, fitting_stem_port]
           )
 
-          # The straight outlet belongs to the wye itself. The branch outlet is
-          # deliberately left uncapped here because BranchTransitionService owns
-          # everything after that socket:
-          #
-          #   same size      -> cap native branch once
-          #   changed size   -> attach reducer/increaser and cap its outer end
-          #
-          # Keeping one owner prevents duplicate circular cap geometry.
           EndFittingSupport.finalize_end_fitting!(
             network: network,
             original_stem_port: stem_port,
             piece: piece,
             fitting_stem_port: fitting_stem_port,
-            outlet_ports: [forward_port]
+            outlet_ports: [forward_port, native_branch_port]
           )
 
           transition = BranchTransitionService.attach(

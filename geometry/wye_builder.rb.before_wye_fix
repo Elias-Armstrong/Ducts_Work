@@ -7,24 +7,13 @@ module DuctExtension
       RECTANGULAR_MAIN_EXTRA_FACTOR = 1.35
       ROUND_MAIN_EXTRA_FACTOR = 0.75
       RECTANGULAR_BRANCH_PULL_OUT_FACTOR = 1.25
-
-      # Let the round branch begin slightly deeper inside the blend. This gives
-      # the smaller hub below enough physical overlap without requiring the
-      # oversized ball-shaped junction used previously.
-      ROUND_BRANCH_PULL_OUT_FACTOR = 0.46
-
+      ROUND_BRANCH_PULL_OUT_FACTOR = 0.62
       RECTANGULAR_BRANCH_EXTRA_FACTOR = 1.25
       ROUND_BRANCH_EXTRA_FACTOR = 0.75
 
-      # Keep the round wye blend closer to the visual proportions of the round
-      # tee/elbow family. The old 0.86/0.70/0.58 ellipsoid read as a large ball
-      # around the junction and produced unusually bright, broad shading.
-      ROUND_HUB_FORWARD_RADIUS_FACTOR = 0.74
-      ROUND_HUB_SIDE_RADIUS_FACTOR = 0.66
-      ROUND_HUB_NORMAL_RADIUS_FACTOR = 0.56
-
-      # Match the round pipe's circumferential resolution and give the blend a
-      # little more longitudinal resolution for smoother SketchUp normals.
+      ROUND_HUB_FORWARD_RADIUS_FACTOR = 0.86
+      ROUND_HUB_SIDE_RADIUS_FACTOR = 0.70
+      ROUND_HUB_NORMAL_RADIUS_FACTOR = 0.58
       ROUND_HUB_SEGMENTS = 24
       ROUND_HUB_RINGS = 10
       ROUND_INTERNAL_HIDE_RADIUS_FACTOR = 1.28

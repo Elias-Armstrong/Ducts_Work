@@ -9,25 +9,6 @@ module DuctExtension
     module BranchTransitionService
       TOLERANCE = 0.001
 
-      def self.socket_dimensions(main_dimensions:, requested_dimensions:)
-        main = Model::DuctDimensions.coerce(main_dimensions)
-        requested = Model::DuctDimensions.coerce(requested_dimensions, fallback: main)
-
-        return main if main.shape != requested.shape
-
-        if main.round?
-          return requested if requested.diameter <= main.diameter + TOLERANCE
-          return main
-        end
-
-        width = [requested.width, main.width].min
-        height = [requested.height, main.height].min
-
-        Model::DuctDimensions.rectangular(width: width, height: height)
-      rescue
-        Model::DuctDimensions.coerce(main_dimensions)
-      end
-
       def self.transition_needed?(source_dimensions, target_dimensions)
         source = Model::DuctDimensions.coerce(source_dimensions)
         target = Model::DuctDimensions.coerce(target_dimensions, fallback: source)
@@ -237,3 +218,4 @@ module DuctExtension
     end
   end
 end
+

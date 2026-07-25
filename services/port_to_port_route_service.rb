@@ -20,9 +20,13 @@ module DuctExtension
         return nil unless start_point
         return nil if start_port && start_port == target_port
 
-        dimensions = Model::Port.dimensions_from_params(
-          { shape: shape, diameter: diameter, width: width, height: height },
-          start_port || target_port
+        dimensions = active_dimensions_for(
+          start_port: start_port,
+          target_port: target_port,
+          shape: shape,
+          diameter: diameter,
+          width: width,
+          height: height
         )
 
         unless start_port
@@ -131,6 +135,19 @@ module DuctExtension
       end
       private_class_method :connect_loose_point_to_port
 
+      # Once a route is attached to a real source port, that port is the
+      # authoritative active size. UI state may change while hovering/snap-
+      # targeting another fitting, but it must never silently resize the route.
+      def self.active_dimensions_for(start_port:, target_port:, shape:, diameter:, width:, height:)
+        return start_port.dimensions if start_port && start_port.respond_to?(:dimensions)
+
+        Model::Port.dimensions_from_params(
+          { shape: shape, diameter: diameter, width: width, height: height },
+          target_port
+        )
+      end
+      private_class_method :active_dimensions_for
+
       def self.passive_reducer_needed?(active_dimensions, target_dimensions)
         active = Model::DuctDimensions.coerce(active_dimensions)
         target = Model::DuctDimensions.coerce(target_dimensions)
@@ -141,13 +158,15 @@ module DuctExtension
       private_class_method :passive_reducer_needed?
 
       def self.passive_reducer_length(active_dimensions, target_dimensions)
-        if defined?(Geometry::ReducerBuilder) && Geometry::ReducerBuilder.respond_to?(:default_length)
+        if defined?(BranchTransitionService) && BranchTransitionService.respond_to?(:default_branch_length)
+          BranchTransitionService.default_branch_length(active_dimensions, target_dimensions).to_f
+        elsif defined?(Geometry::ReducerBuilder) && Geometry::ReducerBuilder.respond_to?(:default_length)
           Geometry::ReducerBuilder.default_length(active_dimensions, target_dimensions).to_f
         else
           [
             Model::DuctDimensions.coerce(active_dimensions).largest,
             Model::DuctDimensions.coerce(target_dimensions).largest
-          ].max * 2.1
+          ].max
         end
       rescue
         12.0
