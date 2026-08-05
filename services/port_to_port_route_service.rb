@@ -29,46 +29,28 @@ module DuctExtension
           height: height
         )
 
+        target_dimensions = Model::Port.dimensions_from_params({}, target_port)
+        transition_plan = passive_transition_plan(
+          source_port: start_port,
+          target_port: target_port,
+          active_dimensions: dimensions,
+          target_dimensions: target_dimensions
+        )
+        return nil unless transition_plan
+
+        routing_target_port = transition_plan[:routing_target_port]
+        passive_transition_step = transition_plan[:transition_step]
+
         unless start_port
           return connect_loose_point_to_port(
             model: model,
             network: network,
             source_point: start_point,
             target_port: target_port,
-            dimensions: dimensions
+            routing_target_port: routing_target_port,
+            dimensions: dimensions,
+            passive_transition_step: passive_transition_step
           )
-        end
-
-        target_dimensions = Model::Port.dimensions_from_params({}, target_port)
-        routing_target_port = target_port
-        passive_reducer_step = nil
-
-        if passive_reducer_needed?(dimensions, target_dimensions)
-          reducer_length = passive_reducer_length(dimensions, target_dimensions)
-          target_incoming_vector = Geometry::VectorMath.normalized(target_port.outward_vector.clone.reverse)
-
-          if target_incoming_vector && reducer_length > Routing::RouteMath::MIN_ROUTE_LENGTH
-            # Preserve the existing port-vector convention used by the working
-            # passive-reducer implementation.
-            reducer_start_point = target_port.point.offset(target_incoming_vector.clone.reverse, reducer_length)
-            routing_target_port = virtual_target_port_for_reducer(
-              target_port: target_port,
-              point: reducer_start_point,
-              dimensions: dimensions
-            )
-
-            passive_reducer_step = Model::BuildStep.new(
-              :reducer,
-              dimensions.merge(
-                deferred_start: true,
-                end_point: target_port.point,
-                start_dimensions: dimensions,
-                end_dimensions: target_dimensions,
-                preferred_width_axis: target_port.width_axis,
-                preferred_height_axis: target_port.height_axis
-              )
-            )
-          end
         end
 
         steps = route_steps(
@@ -79,7 +61,7 @@ module DuctExtension
         )
         return nil unless steps && !steps.empty?
 
-        steps << passive_reducer_step if passive_reducer_step
+        steps << passive_transition_step if passive_transition_step
         build_steps_and_connect(
           model: model,
           network: network,
@@ -118,13 +100,29 @@ module DuctExtension
       end
       private_class_method :build_steps_and_connect
 
-      def self.connect_loose_point_to_port(model:, network:, source_point:, target_port:, dimensions:)
+      def self.connect_loose_point_to_port(
+        model:,
+        network:,
+        source_point:,
+        target_port:,
+        routing_target_port:,
+        dimensions:,
+        passive_transition_step:
+      )
+        return nil unless routing_target_port && routing_target_port.point
+        return nil if source_point.distance(routing_target_port.point) <= Routing::RouteMath::MIN_ROUTE_LENGTH
+
         steps = [
           Model::BuildStep.new(
             :pipe,
-            dimensions.merge(start_point: source_point, end_point: target_port.point)
+            dimensions.merge(
+              start_point: source_point,
+              end_point: routing_target_port.point
+            )
           )
         ]
+
+        steps << passive_transition_step if passive_transition_step
 
         build_steps_and_connect(
           model: model,
@@ -136,8 +134,9 @@ module DuctExtension
       private_class_method :connect_loose_point_to_port
 
       # Once a route is attached to a real source port, that port is the
-      # authoritative active size. UI state may change while hovering/snap-
-      # targeting another fitting, but it must never silently resize the route.
+      # authoritative active size and shape. UI state may change while hovering
+      # another fitting, but the active route must not silently adopt the passive
+      # target's dimensions.
       def self.active_dimensions_for(start_port:, target_port:, shape:, diameter:, width:, height:)
         return start_port.dimensions if start_port && start_port.respond_to?(:dimensions)
 
@@ -148,16 +147,85 @@ module DuctExtension
       end
       private_class_method :active_dimensions_for
 
-      def self.passive_reducer_needed?(active_dimensions, target_dimensions)
+      def self.passive_transition_plan(
+        source_port:,
+        target_port:,
+        active_dimensions:,
+        target_dimensions:
+      )
+        unless passive_transition_needed?(active_dimensions, target_dimensions)
+          return {
+            routing_target_port: target_port,
+            transition_step: nil
+          }
+        end
+
+        transition_length = passive_transition_length(active_dimensions, target_dimensions)
+        target_incoming_vector = Geometry::VectorMath.normalized(
+          target_port.outward_vector.clone.reverse
+        )
+
+        return nil unless target_incoming_vector
+        return nil unless transition_length > Routing::RouteMath::MIN_ROUTE_LENGTH
+
+        # The transition occupies the final section immediately before the passive
+        # target. The active route ends at a virtual port with its own dimensions;
+        # the deferred transition then changes both size and, when necessary,
+        # round/rectangular shape before connecting to the real target port.
+        transition_start_point = target_port.point.offset(
+          target_incoming_vector.clone.reverse,
+          transition_length
+        )
+
+        routing_target_port = virtual_target_port_for_transition(
+          source_port: source_port,
+          target_port: target_port,
+          point: transition_start_point,
+          dimensions: active_dimensions
+        )
+        return nil unless routing_target_port
+
+        target_is_rectangular = target_dimensions[:shape].to_sym == :rectangular
+
+        transition_step = Model::BuildStep.new(
+          :reducer,
+          active_dimensions.merge(
+            deferred_start: true,
+            end_point: target_port.point,
+            start_dimensions: active_dimensions,
+            end_dimensions: target_dimensions,
+            preferred_width_axis: target_is_rectangular ? target_port.width_axis : nil,
+            preferred_height_axis: target_is_rectangular ? target_port.height_axis : nil
+          )
+        )
+
+        {
+          routing_target_port: routing_target_port,
+          transition_step: transition_step
+        }
+      rescue => error
+        puts "PortToPortRouteService.passive_transition_plan failed: #{error.message}"
+        nil
+      end
+      private_class_method :passive_transition_plan
+
+      def self.passive_transition_needed?(active_dimensions, target_dimensions)
+        if defined?(BranchTransitionService) && BranchTransitionService.respond_to?(:transition_needed?)
+          return BranchTransitionService.transition_needed?(
+            active_dimensions,
+            target_dimensions
+          )
+        end
+
         active = Model::DuctDimensions.coerce(active_dimensions)
         target = Model::DuctDimensions.coerce(target_dimensions)
-        active.shape == target.shape && !active.same_size?(target)
+        active.shape != target.shape || !active.same_size?(target)
       rescue
         false
       end
-      private_class_method :passive_reducer_needed?
+      private_class_method :passive_transition_needed?
 
-      def self.passive_reducer_length(active_dimensions, target_dimensions)
+      def self.passive_transition_length(active_dimensions, target_dimensions)
         if defined?(BranchTransitionService) && BranchTransitionService.respond_to?(:default_branch_length)
           BranchTransitionService.default_branch_length(active_dimensions, target_dimensions).to_f
         elsif defined?(Geometry::ReducerBuilder) && Geometry::ReducerBuilder.respond_to?(:default_length)
@@ -171,24 +239,42 @@ module DuctExtension
       rescue
         12.0
       end
-      private_class_method :passive_reducer_length
+      private_class_method :passive_transition_length
 
-      def self.virtual_target_port_for_reducer(target_port:, point:, dimensions:)
+      def self.virtual_target_port_for_transition(
+        source_port:,
+        target_port:,
+        point:,
+        dimensions:
+      )
+        active = Model::DuctDimensions.coerce(dimensions)
+
+        width_axis =
+          if active.rectangular?
+            (source_port && source_port.width_axis) || target_port.width_axis
+          end
+
+        height_axis =
+          if active.rectangular?
+            (source_port && source_port.height_axis) || target_port.height_axis
+          end
+
         Model::Port.new(
           point: point,
           vector: target_port.outward_vector.clone,
-          diameter: dimensions[:diameter],
-          shape: dimensions[:shape],
-          width: dimensions[:width],
-          height: dimensions[:height],
-          width_axis: target_port.width_axis,
-          height_axis: target_port.height_axis,
+          diameter: active.diameter,
+          shape: active.shape,
+          width: active.width,
+          height: active.height,
+          width_axis: width_axis,
+          height_axis: height_axis,
           piece: target_port.piece
         )
       rescue
         nil
       end
-      private_class_method :virtual_target_port_for_reducer
+      private_class_method :virtual_target_port_for_transition
     end
   end
 end
+

@@ -82,7 +82,8 @@ module DuctExtension
         return nil unless start_point && end_point
 
         vector = start_point.vector_to(end_point)
-        return nil if vector.length == 0
+        total_length = vector.length
+        return nil if total_length == 0
 
         vector.normalize!
 
@@ -92,10 +93,27 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
+        frame_plan =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularFrame.straight_run_plan(
+              axis: vector,
+              length: total_length,
+              width: dimensions[:width],
+              height: dimensions[:height],
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true
+            )
+          else
+            nil
+          end
+
+        return nil if dimensions[:shape] == :rectangular && !frame_plan
+
         group = @model.active_entities.add_group
         group.name =
           if dimensions[:shape] == :rectangular
-            "Rectangular Duct Pipe"
+            frame_plan[:relevel] ? "Rectangular Duct Roll Transition" : "Rectangular Duct Pipe"
           else
             "Duct Pipe"
           end
@@ -114,7 +132,8 @@ module DuctExtension
               cap_end: false,
               preferred_width_axis: preferred_width_axis,
               preferred_height_axis: preferred_height_axis,
-              allow_relevel: true
+              allow_relevel: true,
+              frame_plan: frame_plan
             )
           else
             Geometry::PipeBuilder.build_into(
@@ -134,19 +153,8 @@ module DuctExtension
           return nil
         end
 
-        basis =
-          if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.stable_basis_for_axis(
-              vector,
-              dimensions[:width],
-              dimensions[:height],
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis,
-              allow_relevel: true
-            )
-          else
-            nil
-          end
+        start_basis = frame_plan && frame_plan[:start_basis]
+        end_basis = frame_plan && frame_plan[:end_basis]
 
         start_port = Model::Port.new(
           point: start_point,
@@ -155,8 +163,8 @@ module DuctExtension
           shape: dimensions[:shape],
           width: dimensions[:width],
           height: dimensions[:height],
-          width_axis: basis && basis[:width_axis],
-          height_axis: basis && basis[:height_axis]
+          width_axis: start_basis && start_basis[:width_axis],
+          height_axis: start_basis && start_basis[:height_axis]
         )
 
         end_port = Model::Port.new(
@@ -166,8 +174,8 @@ module DuctExtension
           shape: dimensions[:shape],
           width: dimensions[:width],
           height: dimensions[:height],
-          width_axis: basis && basis[:width_axis],
-          height_axis: basis && basis[:height_axis]
+          width_axis: end_basis && end_basis[:width_axis],
+          height_axis: end_basis && end_basis[:height_axis]
         )
 
         piece = Model::DuctPiece.new(
@@ -353,7 +361,6 @@ module DuctExtension
         end_dimensions = reducer_end_dimensions_for(step)
 
         return nil unless start_dimensions && end_dimensions
-        return nil unless start_dimensions[:shape] == end_dimensions[:shape]
 
         start_point =
           if step[:deferred_start] && @last_port
@@ -387,12 +394,7 @@ module DuctExtension
           step[:preferred_height_axis] || frame_source_height_axis(frame_source)
 
         group = @model.active_entities.add_group
-        group.name =
-          if start_dimensions[:shape] == :rectangular
-            "Rectangular Duct Increaser / Reducer"
-          else
-            "Duct Increaser / Reducer"
-          end
+        group.name = reducer_group_name(start_dimensions, end_dimensions)
 
         success = Geometry::ReducerBuilder.build_into(
           group,
@@ -409,8 +411,8 @@ module DuctExtension
           return nil
         end
 
-        basis =
-          if start_dimensions[:shape] == :rectangular
+        transition_basis =
+          if start_dimensions[:shape] == :rectangular || end_dimensions[:shape] == :rectangular
             Geometry::RectangularFrame.basis_for_axis(
               vector,
               preferred_width_axis: preferred_width_axis,
@@ -420,6 +422,9 @@ module DuctExtension
             nil
           end
 
+        start_basis = start_dimensions[:shape] == :rectangular ? transition_basis : nil
+        end_basis = end_dimensions[:shape] == :rectangular ? transition_basis : nil
+
         start_port = Model::Port.new(
           point: start_point,
           vector: vector.clone.reverse,
@@ -427,8 +432,8 @@ module DuctExtension
           shape: start_dimensions[:shape],
           width: start_dimensions[:width],
           height: start_dimensions[:height],
-          width_axis: basis && basis[:width_axis],
-          height_axis: basis && basis[:height_axis]
+          width_axis: start_basis && start_basis[:width_axis],
+          height_axis: start_basis && start_basis[:height_axis]
         )
 
         end_port = Model::Port.new(
@@ -438,8 +443,8 @@ module DuctExtension
           shape: end_dimensions[:shape],
           width: end_dimensions[:width],
           height: end_dimensions[:height],
-          width_axis: basis && basis[:width_axis],
-          height_axis: basis && basis[:height_axis]
+          width_axis: end_basis && end_basis[:width_axis],
+          height_axis: end_basis && end_basis[:height_axis]
         )
 
         piece = Model::DuctPiece.new(
@@ -508,6 +513,23 @@ module DuctExtension
         Model::Port.dimensions_from_params(params || {})
       rescue
         nil
+      end
+
+      def reducer_group_name(start_dimensions, end_dimensions)
+        start_shape = start_dimensions[:shape].to_sym
+        end_shape = end_dimensions[:shape].to_sym
+
+        if start_shape != end_shape
+          return start_shape == :rectangular ?
+            "Rectangular to Round Transition" :
+            "Round to Rectangular Transition"
+        end
+
+        start_shape == :rectangular ?
+          "Rectangular Duct Increaser / Reducer" :
+          "Duct Increaser / Reducer"
+      rescue
+        "Duct Transition"
       end
 
       def default_bend_radius(dimensions)
