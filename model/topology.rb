@@ -1,3 +1,4 @@
+# ===== Consolidated from: model/port.rb =====
 module DuctExtension
   module Model
     class Port
@@ -143,6 +144,100 @@ module DuctExtension
         end
       rescue
         Geom::Point3d.new(0, 0, 0)
+      end
+    end
+  end
+end
+
+# ===== Consolidated from: model/duct_piece.rb =====
+module DuctExtension
+  module Model
+    class DuctPiece
+      attr_accessor :type
+      attr_accessor :group
+      attr_accessor :ports
+
+      def initialize(type:, group:, ports:)
+        @type = type.to_sym
+        @group = group
+        @ports = ports || []
+
+        @ports.each do |port|
+          port.piece = self if port.respond_to?(:piece=)
+        end
+      end
+
+      def valid?
+        @group && @group.valid?
+      end
+
+      def round?
+        shape == :round
+      end
+
+      def rectangular?
+        shape == :rectangular
+      end
+
+      def shape
+        first_port = @ports.find { |port| port.respond_to?(:shape) }
+        first_port ? first_port.shape : :round
+      end
+
+      def diameter
+        first_port = @ports.find { |port| port.respond_to?(:diameter) }
+        first_port ? first_port.diameter : 8.0
+      end
+
+      def width
+        first_port = @ports.find { |port| port.respond_to?(:width) }
+        first_port ? first_port.width : diameter
+      end
+
+      def height
+        first_port = @ports.find { |port| port.respond_to?(:height) }
+        first_port ? first_port.height : diameter
+      end
+    end
+  end
+end
+
+# ===== Consolidated from: model/connection.rb =====
+module DuctExtension
+  module Model
+    class Connection
+      attr_reader :port_a
+      attr_reader :port_b
+
+      def initialize(port_a, port_b)
+        @port_a = port_a
+        @port_b = port_b
+      end
+
+      def includes?(port)
+        @port_a == port || @port_b == port
+      end
+
+      def includes_any?(ports)
+        Array(ports).any? { |port| includes?(port) }
+      end
+
+      def other(port)
+        return @port_b if @port_a == port
+        return @port_a if @port_b == port
+
+        nil
+      end
+
+      def valid?
+        @port_a &&
+          @port_b &&
+          @port_a.piece &&
+          @port_b.piece &&
+          @port_a.piece.group &&
+          @port_b.piece.group &&
+          @port_a.piece.group.valid? &&
+          @port_b.piece.group.valid?
       end
     end
   end

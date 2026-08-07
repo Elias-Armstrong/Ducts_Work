@@ -1,3 +1,75 @@
+# ===== Consolidated from: services/branch_size_prompt.rb =====
+module DuctExtension
+  module Services
+    # Shared branch-size UI for fittings whose side outlet may differ from the
+    # main duct. Keeping this here prevents wye/cross tools from drifting into
+    # slightly different validation/default rules.
+    module BranchSizePrompt
+      def self.ask(main_dimensions:, title:, allow_round_from_rectangular: false)
+        main = Model::DuctDimensions.coerce(main_dimensions)
+
+        if main.round?
+          input = ::UI.inputbox(
+            ["Main Diameter:", "Branch Diameter:"],
+            [main.diameter.to_s, main.diameter.to_s],
+            [],
+            title
+          )
+          return nil unless input
+
+          return Model::DuctDimensions.round(
+            diameter: Model::DuctDimensions.positive_number(input[1], main.diameter)
+          )
+        end
+
+        if allow_round_from_rectangular
+          input = ::UI.inputbox(
+            [
+              "Main Width:", "Main Height:", "Branch Shape:",
+              "Round Branch Diameter:", "Rectangular Branch Width:", "Rectangular Branch Height:"
+            ],
+            [
+              main.width.to_s, main.height.to_s, "Rectangular",
+              main.largest.to_s, main.width.to_s, main.height.to_s
+            ],
+            ["", "", "Rectangular|Round", "", "", ""],
+            title
+          )
+          return nil unless input
+
+          if Model::DuctDimensions.normalize_shape(input[2]) == :round
+            return Model::DuctDimensions.round(
+              diameter: Model::DuctDimensions.positive_number(input[3], main.largest)
+            )
+          end
+
+          return Model::DuctDimensions.rectangular(
+            width: Model::DuctDimensions.positive_number(input[4], main.width),
+            height: Model::DuctDimensions.positive_number(input[5], main.height)
+          )
+        end
+
+        input = ::UI.inputbox(
+          ["Main Width:", "Main Height:", "Branch Width:", "Branch Height:"],
+          [main.width.to_s, main.height.to_s, main.width.to_s, main.height.to_s],
+          [],
+          title
+        )
+        return nil unless input
+
+        Model::DuctDimensions.rectangular(
+          width: Model::DuctDimensions.positive_number(input[2], main.width),
+          height: Model::DuctDimensions.positive_number(input[3], main.height)
+        )
+      rescue => error
+        puts "BranchSizePrompt.ask failed: #{error.message}"
+        nil
+      end
+    end
+  end
+end
+
+# ===== Consolidated from: services/branch_transition_service.rb =====
 module DuctExtension
   module Services
     # Owns the small transition immediately after a fitting branch.
@@ -219,3 +291,83 @@ module DuctExtension
   end
 end
 
+# ===== Consolidated from: services/end_reducer_insert_service.rb =====
+module DuctExtension
+  module Services
+    class EndReducerInsertService
+      def self.insert_at_port(
+        model:,
+        network:,
+        stem_port:,
+        new_diameter: nil,
+        new_width: nil,
+        new_height: nil,
+        length: nil
+      )
+        return nil unless model && network && stem_port
+        return nil unless stem_port.piece && stem_port.piece.group && stem_port.piece.group.valid?
+
+        start_dimensions = Model::Port.dimensions_from_params({}, stem_port)
+        end_dimensions = requested_dimensions(
+          stem_port,
+          start_dimensions,
+          new_diameter: new_diameter,
+          new_width: new_width,
+          new_height: new_height
+        )
+        return nil unless valid_size_change?(start_dimensions, end_dimensions)
+
+        ModelOperation.run(
+          model: model,
+          network: network,
+          name: "Insert Increaser / Reducer"
+        ) do |operation|
+          transition = BranchTransitionService.attach(
+            model: model,
+            network: network,
+            source_port: stem_port,
+            target_dimensions: end_dimensions,
+            preferred_width_axis: stem_port.width_axis,
+            preferred_height_axis: stem_port.height_axis,
+            cap_output: true,
+            length: length
+          )
+          operation.abort!(nil) unless transition && transition[:piece]
+
+          {
+            piece: transition[:piece],
+            old_port: transition[:input_port],
+            new_port: transition[:output_port],
+            start_dimensions: start_dimensions,
+            end_dimensions: end_dimensions
+          }
+        end
+      rescue => error
+        puts "EndReducerInsertService.insert_at_port failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
+      end
+
+      def self.requested_dimensions(stem_port, start_dimensions, new_diameter:, new_width:, new_height:)
+        params =
+          if start_dimensions[:shape] == :rectangular
+            { shape: :rectangular, width: new_width, height: new_height }
+          else
+            { shape: :round, diameter: new_diameter }
+          end
+
+        Model::Port.dimensions_from_params(params, stem_port)
+      end
+      private_class_method :requested_dimensions
+
+      def self.valid_size_change?(start_dimensions, end_dimensions)
+        return false unless start_dimensions && end_dimensions
+        return false unless start_dimensions[:shape] == end_dimensions[:shape]
+
+        BranchTransitionService.transition_needed?(start_dimensions, end_dimensions)
+      rescue
+        false
+      end
+    end
+  end
+end

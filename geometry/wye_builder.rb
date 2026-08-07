@@ -155,7 +155,3 @@ module DuctExtension
     end
   end
 end
-require_relative 'wye/round_geometry'
-require_relative 'wye/rectangular_geometry'
-require_relative 'wye/rectangular_visual_geometry'
-require_relative 'wye/shared_geometry'
