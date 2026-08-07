@@ -24,6 +24,7 @@ module DuctExtension
         @last_port = nil
         @start_point = nil
         @orthogonal_axis_lock = nil
+        reset_catalog_workflow! if respond_to?(:reset_catalog_workflow!, true)
         @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
         Sketchup.status_text = message
         view.invalidate if view
@@ -413,6 +414,11 @@ module DuctExtension
       end
 
       def update_length_status(view, x, y)
+        if catalog_workflow_active?
+          update_catalog_mouse_status(view, x, y)
+          return
+        end
+
         start = active_route_start_point
 
         unless start && @current_ip.valid?

@@ -71,6 +71,14 @@ module DuctExtension
 
         socket_depth = TeePlacementCalculator.socket_depth(dimensions)
         branch_socket_depth = TeePlacementCalculator.branch_socket_depth(dimensions)
+        if catalog_product && dimensions[:shape] == :round
+          socket_depth = Catalog::Manager.tee_main_socket_depth(catalog_product, socket_depth)
+          branch_socket_depth = Catalog::Manager.tee_branch_socket_depth(
+            catalog_product,
+            dimensions,
+            branch_socket_depth
+          )
+        end
 
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
         main_end_socket = center.offset(main_vector, socket_depth)
@@ -228,15 +236,27 @@ module DuctExtension
               preferred_main_height_axis: rectangular_basis && rectangular_basis[:height_axis]
             )
           else
-            Geometry::TeeBuilder.build_into(
-              tee_group,
-              center,
-              main_vector,
-              branch_vector,
-              dimensions[:diameter],
-              main_depth: socket_depth,
-              branch_depth: branch_socket_depth
-            )
+            if catalog_product
+              Catalog::MasterFlowGeometry.build_round_tee(
+                group: tee_group,
+                center: center,
+                main_vector: main_vector,
+                branch_vector: branch_vector,
+                diameter: dimensions[:diameter],
+                main_depth: socket_depth,
+                branch_depth: branch_socket_depth
+              )
+            else
+              Geometry::TeeBuilder.build_into(
+                tee_group,
+                center,
+                main_vector,
+                branch_vector,
+                dimensions[:diameter],
+                main_depth: socket_depth,
+                branch_depth: branch_socket_depth
+              )
+            end
           end
 
         unless success

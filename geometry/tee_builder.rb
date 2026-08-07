@@ -1,3 +1,4 @@
+# ===== Consolidated from: geometry/tee_builder.rb =====
 module DuctExtension
   module Geometry
     module TeeBuilder

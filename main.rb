@@ -62,6 +62,7 @@ require_relative 'geometry/reducer_builder'
 require_relative 'geometry/vent_builder'
 require_relative 'geometry/vent_side_register_geometry'
 require_relative 'geometry/vent_detail_geometry'
+require_relative 'catalog/master_flow_geometry'
 
 # ===== CORE SERVICES =====
 require_relative 'services/network_persistence_service'
@@ -100,6 +101,7 @@ require_relative 'tool/duct_tool_interaction'
 require_relative 'tool/duct_tool_components'
 require_relative 'tool/duct_tool_navigation'
 require_relative 'tool/duct_tool_preview'
+require_relative 'tool/catalog_workflow'
 require_relative 'tool/duct_tool'
 require_relative 'tool/reducer_tool'
 
@@ -109,9 +111,30 @@ DuctExtension::Toolbar.create
 
 module CustomDuctExtension
   unless @simple_duct_menu_created
-    menu = UI.menu("Plugins").add_submenu("Simple Duct Extension")
+    menu = UI.menu("Extensions").add_submenu("Simple Duct Extension")
 
-    menu.add_item("Set Catalog...") { DuctExtension::UIActions.set_catalog }
+    menu.add_item("Quick Menu...") { DuctExtension::UIActions.quick_menu }
+    menu.add_item("Resume / Activate Duct Tool") { DuctExtension::UIActions.resume_duct_tool }
+    menu.add_item("Menu Diagnostics...") { DuctExtension::UIActions.menu_diagnostics }
+    menu.add_separator
+
+    catalog_menu = menu.add_submenu("Catalog")
+    catalog_menu.add_item("Set Catalog...") { DuctExtension::UIActions.set_catalog }
+    catalog_menu.add_item("Use Base / Generic") { DuctExtension::UIActions.use_base_catalog }
+    catalog_menu.add_item("Use Master Flow") { DuctExtension::UIActions.use_master_flow_catalog }
+    catalog_menu.add_separator
+    catalog_menu.add_item("Browse Active Catalog...") { DuctExtension::UIActions.browse_catalog }
+    catalog_menu.add_item("Current Size / Availability...") { DuctExtension::UIActions.current_catalog_options }
+    catalog_menu.add_item("Choose Current Duct / Elbow Products...") { DuctExtension::UIActions.choose_catalog_products }
+
+    components_menu = menu.add_submenu("Components")
+    components_menu.add_item("Add Tee") { DuctExtension::UIActions.add_tee }
+    components_menu.add_item("End Tee") { DuctExtension::UIActions.add_end_tee }
+    components_menu.add_item("End Wye") { DuctExtension::UIActions.add_end_wye }
+    components_menu.add_item("End Cross") { DuctExtension::UIActions.add_end_cross }
+    components_menu.add_item("End Reducer / Converter") { DuctExtension::UIActions.add_end_reducer }
+    components_menu.add_item("End Cover / Vent") { DuctExtension::UIActions.add_end_cover }
+
     menu.add_separator
     menu.add_item("Draw Orthogonal Duct") { DuctExtension::UIActions.draw_duct }
     menu.add_item("Resize Selected Duct Pieces") { DuctExtension::UIActions.resize_selection }
@@ -121,5 +144,7 @@ module CustomDuctExtension
     @simple_duct_menu_created = true
     file_loaded(__FILE__) unless file_loaded?(__FILE__)
   end
-end
 
+  # Right-click controls are owned exclusively by DuctTool#getMenu.
+  # The Extensions menu and toolbar remain as persistent fallbacks.
+end

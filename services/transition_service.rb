@@ -164,15 +164,29 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : transition_group_name(source_dimensions, target_dimensions)
 
-        success = Geometry::ReducerBuilder.build_into(
-          group,
-          start_point,
-          end_point,
-          start_dimensions: source_dimensions,
-          end_dimensions: target_dimensions,
-          preferred_width_axis: basis_width,
-          preferred_height_axis: basis_height
-        )
+        success =
+          if catalog_product
+            Catalog::MasterFlowGeometry.build_transition(
+              group: group,
+              start_point: start_point,
+              end_point: end_point,
+              start_dimensions: source_dimensions,
+              end_dimensions: target_dimensions,
+              product: catalog_product,
+              preferred_width_axis: basis_width,
+              preferred_height_axis: basis_height
+            )
+          else
+            Geometry::ReducerBuilder.build_into(
+              group,
+              start_point,
+              end_point,
+              start_dimensions: source_dimensions,
+              end_dimensions: target_dimensions,
+              preferred_width_axis: basis_width,
+              preferred_height_axis: basis_height
+            )
+          end
 
         unless success
           group.erase! if group.valid?

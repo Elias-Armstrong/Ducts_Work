@@ -42,10 +42,26 @@ module DuctExtension
     module DuctToolMenu
       private
 
-      def populate_duct_tool_menu(menu, _flags, _x, _y, _view)
+      def populate_duct_tool_menu(menu, _flags = nil, _x = nil, _y = nil, _view = nil)
+        catalog_active = Catalog::Manager.active?(Sketchup.active_model)
+
         menu.add_item("Catalog: #{Catalog::Manager.active_name(Sketchup.active_model)}...") {
-          Catalog::Manager.prompt_set_catalog(Sketchup.active_model)
+          key = Catalog::Manager.prompt_set_catalog(Sketchup.active_model)
+          Sketchup.active_model.select_tool(self.class.new) if key
         }
+
+        if catalog_active
+          menu.add_item("Switch to Base / Generic Mode") {
+            Catalog::Manager.set_active(Sketchup.active_model, Catalog::Manager::BASE_KEY)
+            Sketchup.active_model.select_tool(self.class.new)
+          }
+          menu.add_item("Browse Master Flow Catalog...") {
+            Catalog::Manager.show_catalog_browser(Sketchup.active_model)
+          }
+          menu.add_item("Options for Current Size...") { show_current_catalog_options }
+          menu.add_item("Choose Current Duct / Elbow Products...") { choose_catalog_products_from_menu }
+        end
+
         menu.add_separator
         add_mode_menu_items(menu)
         menu.add_separator
@@ -53,18 +69,86 @@ module DuctExtension
         menu.add_separator
         add_axis_lock_menu(menu)
         add_length_increment_menu(menu)
-        add_vent_repeat_menu(menu)
+        add_vent_repeat_menu(menu) unless catalog_active
       rescue => error
         puts "DuctToolMenu.populate_duct_tool_menu failed: #{error.message}"
       end
 
       def add_mode_menu_items(menu)
+        if Catalog::Manager.active?(Sketchup.active_model)
+          menu.add_item("Placement: Catalog Elbow / Straight → Run") {
+            @fitting_mode = :elbow
+            update_catalog_status
+          }
+
+          if @last_port && respond_to?(:catalog_phase, true) && catalog_phase == :elbow
+            menu.add_item("Next Connection: Continue Straight (No Elbow)") {
+              @catalog_phase = :run
+              @orthogonal_axis_lock = nil
+              reset_typed_length
+              update_catalog_status
+            }
+          end
+          return
+        end
+
         menu.add_item("Mode: Auto-Elbow") { select_fitting_mode(:elbow) }
         menu.add_item("Mode: Straight Only") { select_fitting_mode(:straight) }
       end
 
       def add_component_menu(menu)
         components_menu = menu.add_submenu("New Components")
+
+        if Catalog::Manager.active?(Sketchup.active_model)
+          dims = current_dimensions
+          tees = Catalog::Manager.junction_products(dims, :tee, Sketchup.active_model)
+          wyes = Catalog::Manager.junction_products(dims, :wye, Sketchup.active_model)
+          transitions = Catalog::Manager.transition_targets(dims, Sketchup.active_model)
+          cover = Catalog::Manager.end_cover_product(dims, Sketchup.active_model)
+
+          if tees.empty?
+            components_menu.add_item("Tee — none for current size") { show_current_catalog_options }
+          else
+            components_menu.add_item("Add Tee — #{tees.map(&:sku).join(' / ')}") {
+              select_fitting_mode(:tee, round_tee_from_click: true)
+            }
+            components_menu.add_item("End Tee — #{tees.map(&:sku).join(' / ')}") {
+              select_fitting_mode(:end_tee, round_tee_from_click: true)
+            }
+          end
+
+          if wyes.empty?
+            components_menu.add_item("Wye — none for current size") { show_current_catalog_options }
+          else
+            components_menu.add_item("End Wye — #{wyes.map(&:sku).join(' / ')}") {
+              select_fitting_mode(:end_wye)
+            }
+          end
+
+          if transitions.empty?
+            components_menu.add_item("Reducer / Converter — none from current size") { show_current_catalog_options }
+          else
+            components_menu.add_item("End Reducer / Converter...") {
+              select_fitting_mode(:end_reducer)
+            }
+          end
+
+          if cover
+            components_menu.add_item("End Cover — #{cover.sku}") {
+              select_fitting_mode(
+                :vent,
+                status: "Master Flow end-cover mode: click the open end of a compatible catalog duct."
+              )
+            }
+          else
+            components_menu.add_item("End Cover — none for current size") { show_current_catalog_options }
+          end
+
+          # Master Flow RESMF164 has no close catalog equivalent for the base
+          # cross or generic side-register primitive. Deliberately omit them here
+          # instead of offering a command that can only fail or create a fake SKU.
+          return
+        end
 
         components_menu.add_item("Add Tee") {
           select_fitting_mode(:tee, round_tee_from_click: true)
@@ -256,6 +340,11 @@ module DuctExtension
         character = typed_length_character_for_key(key_code)
         return false unless character
 
+        if catalog_workflow_active? && catalog_phase != :run
+          Sketchup.status_text = "Place the selected catalog elbow first. Length entry applies to the following straight run."
+          return true
+        end
+
         return true unless active_route_start_point
         return true unless typed_length_character_allowed?(character)
 
@@ -391,6 +480,8 @@ module DuctExtension
       end
 
       def commit_typed_length(view)
+        return commit_catalog_typed_length(view) if catalog_workflow_active?
+
         start = active_route_start_point
         return false unless start
 

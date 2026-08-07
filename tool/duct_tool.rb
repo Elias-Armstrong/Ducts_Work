@@ -39,6 +39,10 @@ module DuctExtension
       end
 
     class DuctTool
+      class << self
+        attr_accessor :active_instance
+      end
+
       include DuctToolMenu
       include DuctToolTypedLength
       include DuctToolVents
@@ -46,6 +50,7 @@ module DuctExtension
       include DuctToolNavigation
       include DuctToolRoutingPreview
       include DuctToolSettings
+      include DuctToolCatalogWorkflow
 
       @@last_duct_shape = :round
       @@last_diameter = 8.0
@@ -59,7 +64,9 @@ module DuctExtension
       @@vent_repeat_interval = 24.0 unless class_variable_defined?(:@@vent_repeat_interval)
 
 
-      def initialize
+      def initialize(initial_fitting_mode: :elbow, prompt_settings: true)
+        @initial_fitting_mode = initial_fitting_mode.to_sym
+        @prompt_settings = !!prompt_settings
         @network = ::DuctExtension.network_for_model(Sketchup.active_model)
 
         @start_point = nil
@@ -72,7 +79,7 @@ module DuctExtension
         @length_increment = @@last_length_increment
         @round_tee_side_mode = @@last_round_tee_side_mode
 
-        @fitting_mode = :elbow
+        @fitting_mode = @initial_fitting_mode
         @orthogonal_axis_lock = nil
 
         @current_ip = Sketchup::InputPoint.new
@@ -86,75 +93,79 @@ module DuctExtension
         @connector_swing_session = nil
 
         @typed_length_buffer = ""
+        @catalog_phase = :start
       end
 
       def activate
+        self.class.active_instance = self
         @network = Services::NetworkRebuildService.rebuild(Sketchup.active_model)
         Sketchup.set_status_text("Orthogonal Duct Tool active.")
 
-        if Catalog::Manager.active?(Sketchup.active_model)
-          catalog_settings = Catalog::Manager.prompt_duct_settings(
-            model: Sketchup.active_model,
-            current_shape: @duct_shape,
-            current_diameter: @current_diameter,
-            current_width: @current_width,
-            current_height: @current_height,
-            current_increment: @length_increment
-          )
+        if @prompt_settings
+          if Catalog::Manager.active?(Sketchup.active_model)
+            catalog_settings = Catalog::Manager.prompt_duct_settings(
+              model: Sketchup.active_model,
+              current_shape: @duct_shape,
+              current_diameter: @current_diameter,
+              current_width: @current_width,
+              current_height: @current_height,
+              current_increment: @length_increment
+            )
 
-          unless catalog_settings
-            Sketchup.active_model.select_tool(nil)
-            return
+            unless catalog_settings
+              Sketchup.active_model.select_tool(nil)
+              return
+            end
+
+            @duct_shape = catalog_settings[:shape]
+            @current_diameter = catalog_settings[:diameter].to_f
+            @current_width = catalog_settings[:width].to_f
+            @current_height = catalog_settings[:height].to_f
+            @length_increment = catalog_settings[:length_increment].to_f
+
+            # Catalog construction always uses the rigid part-placement workflow.
+            # A size with no elbow can still draw straight stock, but it cannot turn
+            # until the user changes size through a real catalog transition.
+            @fitting_mode = :elbow
+          else
+            prompts = [
+              "Duct Shape:",
+              "Round Diameter (Inches):",
+              "Rectangular Width (Inches):",
+              "Rectangular Height (Inches):",
+              "Length Increment:"
+            ]
+
+            defaults = [
+              shape_label(@duct_shape),
+              @current_diameter.to_s,
+              @current_width.to_s,
+              @current_height.to_s,
+              increment_label(@length_increment)
+            ]
+
+            lists = [
+              "Round|Rectangular",
+              "",
+              "",
+              "",
+              "1/4 inch|1/2 inch|1 inch"
+            ]
+
+            input = ::UI.inputbox(prompts, defaults, lists, "Orthogonal Duct Settings")
+
+            unless input
+              Sketchup.active_model.select_tool(nil)
+              return
+            end
+
+            @duct_shape = normalize_shape(input[0])
+            @current_diameter = InputHelpers.positive_number(input[1], @current_diameter)
+            @current_width = InputHelpers.positive_number(input[2], @current_width)
+            @current_height = InputHelpers.positive_number(input[3], @current_height)
+            @length_increment = normalize_increment(input[4])
           end
 
-          @duct_shape = catalog_settings[:shape]
-          @current_diameter = catalog_settings[:diameter].to_f
-          @current_width = catalog_settings[:width].to_f
-          @current_height = catalog_settings[:height].to_f
-          @length_increment = catalog_settings[:length_increment].to_f
-
-          # Some catalog duct sizes have no matching elbow in the pilot subset.
-          # In that case the settings dialog explicitly says “straight runs only”;
-          # make the routing mode agree instead of planning a bend that will later
-          # be rejected by GeometryExecutor.
-          @fitting_mode = catalog_settings[:elbow_product] ? :elbow : :straight
-        else
-          prompts = [
-            "Duct Shape:",
-            "Round Diameter (Inches):",
-            "Rectangular Width (Inches):",
-            "Rectangular Height (Inches):",
-            "Length Increment:"
-          ]
-
-          defaults = [
-            shape_label(@duct_shape),
-            @current_diameter.to_s,
-            @current_width.to_s,
-            @current_height.to_s,
-            increment_label(@length_increment)
-          ]
-
-          lists = [
-            "Round|Rectangular",
-            "",
-            "",
-            "",
-            "1/4 inch|1/2 inch|1 inch"
-          ]
-
-          input = ::UI.inputbox(prompts, defaults, lists, "Orthogonal Duct Settings")
-
-          unless input
-            Sketchup.active_model.select_tool(nil)
-            return
-          end
-
-          @duct_shape = normalize_shape(input[0])
-          @current_diameter = InputHelpers.positive_number(input[1], @current_diameter)
-          @current_width = InputHelpers.positive_number(input[2], @current_width)
-          @current_height = InputHelpers.positive_number(input[3], @current_height)
-          @length_increment = normalize_increment(input[4])
         end
 
         if @duct_shape == :round
@@ -181,12 +192,32 @@ module DuctExtension
         @orbit_last_y = nil
         @connector_swing_session = nil
         reset_typed_length
+        reset_catalog_workflow!
 
         update_status_for_current_shape
       end
 
+      # Keep the tool context menu on the same simple callback path that worked
+      # before catalog mode was introduced. Catalog-specific entries belong in
+      # DuctToolMenu#populate_duct_tool_menu; no competing application handler
+      # should try to own the same right-click.
       def getMenu(menu, flags, x, y, view)
         populate_duct_tool_menu(menu, flags, x, y, view)
+      end
+
+      # Public command bridge used by the persistent Extensions/context menus.
+      # The implementation methods stay private inside the tool mixins.
+      def set_fitting_mode_from_ui(mode)
+        select_fitting_mode(mode, round_tee_from_click: mode.to_sym == :tee)
+        self
+      end
+
+      def show_catalog_options_from_ui
+        show_current_catalog_options
+      end
+
+      def choose_catalog_products_from_ui
+        choose_catalog_products_from_menu
       end
 
       def onCancel(reason, view)
@@ -203,6 +234,7 @@ module DuctExtension
         @orbit_last_x = nil
         @orbit_last_y = nil
         reset_typed_length
+        reset_catalog_workflow!
 
         update_status_for_current_shape
         view.invalidate if view
@@ -293,6 +325,8 @@ module DuctExtension
       end
 
       def draw(view)
+        return if draw_catalog_preview(view) if catalog_workflow_active?
+
         start = active_route_start_point
         return unless start
 
@@ -362,6 +396,12 @@ module DuctExtension
         point = clicked_point
 
         if dispatch_special_fitting_click(view, x, y, clicked_point)
+          view.invalidate if view
+          return
+        end
+
+        if catalog_workflow_active?
+          handle_catalog_build_click(view, x, y, clicked_point)
           view.invalidate if view
           return
         end
@@ -496,6 +536,7 @@ module DuctExtension
 
       def deactivate(view)
         cancel_connector_swing_drag(view) if @connector_swing_session
+        self.class.active_instance = nil if self.class.active_instance.equal?(self)
       end
 
       private
