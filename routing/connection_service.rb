@@ -1,4 +1,3 @@
-# ===== Consolidated from: services/pipe_connection_service.rb =====
 module DuctExtension
   module Services
     module PipeTargetConnectionService
@@ -222,6 +221,11 @@ module DuctExtension
             routing_target_port: target_port,
             transition_step: nil
           }
+        end
+
+        if Catalog::Manager.active?(Sketchup.active_model)
+          product = Catalog::Manager.transition_product(active_dimensions, target_dimensions, Sketchup.active_model)
+          return Catalog::Manager.notify_unsupported(:transition, target_dimensions) unless product
         end
 
         transition_length = passive_transition_length(active_dimensions, target_dimensions)

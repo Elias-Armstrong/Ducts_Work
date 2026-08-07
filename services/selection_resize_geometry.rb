@@ -74,12 +74,24 @@ module DuctExtension
             selected_port: selected_port,
             external_port: external_port,
             external_dimensions: external_dimensions,
-            reducer_length: Geometry::ReducerBuilder.default_length(external_dimensions, target_dimensions)
+            reducer_length: boundary_transition_length(external_dimensions, target_dimensions)
           }
         end
       rescue
         []
       end
+
+      def self.boundary_transition_length(external_dimensions, target_dimensions)
+        fallback = Geometry::ReducerBuilder.default_length(external_dimensions, target_dimensions)
+        return fallback unless Catalog::Manager.active?(Sketchup.active_model)
+
+        product = Catalog::Manager.transition_product(external_dimensions, target_dimensions, Sketchup.active_model)
+        return 0.0 unless product
+        Catalog::Manager.transition_length(product, fallback)
+      rescue
+        fallback || 0.0
+      end
+      private_class_method :boundary_transition_length
 
       def self.apply_boundary_pullbacks!(boundary_plan)
         boundary_plan.each do |item|
@@ -110,6 +122,12 @@ module DuctExtension
       )
         return nil unless selected_port && external_port && selected_port.point && external_port.point
 
+        catalog_product = nil
+        if Catalog::Manager.active?(model)
+          catalog_product = Catalog::Manager.transition_product(external_dimensions, selected_dimensions, model)
+          return Catalog::Manager.notify_unsupported(:transition, external_dimensions) unless catalog_product
+        end
+
         network.disconnect_ports(selected_port, external_port)
         PortCapService.remove(selected_port)
         PortCapService.remove(external_port)
@@ -120,9 +138,14 @@ module DuctExtension
         return nil unless vector
 
         group = model.active_entities.add_group
-        group.name = selected_dimensions[:shape] == :rectangular ?
-          "Auto Rectangular Duct Increaser / Reducer" :
-          "Auto Round Duct Increaser / Reducer"
+        group.name =
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Auto Transition"
+          elsif selected_dimensions[:shape] == :rectangular
+            "Auto Rectangular Duct Increaser / Reducer"
+          else
+            "Auto Round Duct Increaser / Reducer"
+          end
 
         preferred_start_width_axis = external_port.width_axis || selected_port.width_axis
         preferred_start_height_axis = external_port.height_axis || selected_port.height_axis
@@ -189,6 +212,11 @@ module DuctExtension
         network.connect_ports(external_port, reducer_start_port)
         network.connect_ports(reducer_end_port, selected_port)
         PieceMetadataService.save_piece(reducer_piece)
+        Catalog::Manager.tag_piece(
+          reducer_piece,
+          catalog_product,
+          "modeled_transition_length" => start_point.distance(end_point)
+        ) if catalog_product
         reducer_piece
       rescue => error
         puts "SelectionResizeLayoutService.insert_boundary_reducer! failed: #{error.message}"

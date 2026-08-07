@@ -89,50 +89,73 @@ module DuctExtension
       end
 
       def activate
-        prompts = [
-          "Duct Shape:",
-          "Round Diameter (Inches):",
-          "Rectangular Width (Inches):",
-          "Rectangular Height (Inches):",
-          "Length Increment:"
-        ]
-
-        defaults = [
-          shape_label(@duct_shape),
-          @current_diameter.to_s,
-          @current_width.to_s,
-          @current_height.to_s,
-          increment_label(@length_increment)
-        ]
-
-        lists = [
-          "Round|Rectangular",
-          "",
-          "",
-          "",
-          "1/4 inch|1/2 inch|1 inch"
-        ]
-
-        input = ::UI.inputbox(
-          prompts,
-          defaults,
-          lists,
-          "Orthogonal Duct Settings"
-        )
-
         @network = Services::NetworkRebuildService.rebuild(Sketchup.active_model)
         Sketchup.set_status_text("Orthogonal Duct Tool active.")
 
-        unless input
-          Sketchup.active_model.select_tool(nil)
-          return
-        end
+        if Catalog::Manager.active?(Sketchup.active_model)
+          catalog_settings = Catalog::Manager.prompt_duct_settings(
+            model: Sketchup.active_model,
+            current_shape: @duct_shape,
+            current_diameter: @current_diameter,
+            current_width: @current_width,
+            current_height: @current_height,
+            current_increment: @length_increment
+          )
 
-        @duct_shape = normalize_shape(input[0])
-        @current_diameter = InputHelpers.positive_number(input[1], @current_diameter)
-        @current_width = InputHelpers.positive_number(input[2], @current_width)
-        @current_height = InputHelpers.positive_number(input[3], @current_height)
-        @length_increment = normalize_increment(input[4])
+          unless catalog_settings
+            Sketchup.active_model.select_tool(nil)
+            return
+          end
+
+          @duct_shape = catalog_settings[:shape]
+          @current_diameter = catalog_settings[:diameter].to_f
+          @current_width = catalog_settings[:width].to_f
+          @current_height = catalog_settings[:height].to_f
+          @length_increment = catalog_settings[:length_increment].to_f
+
+          # Some catalog duct sizes have no matching elbow in the pilot subset.
+          # In that case the settings dialog explicitly says “straight runs only”;
+          # make the routing mode agree instead of planning a bend that will later
+          # be rejected by GeometryExecutor.
+          @fitting_mode = catalog_settings[:elbow_product] ? :elbow : :straight
+        else
+          prompts = [
+            "Duct Shape:",
+            "Round Diameter (Inches):",
+            "Rectangular Width (Inches):",
+            "Rectangular Height (Inches):",
+            "Length Increment:"
+          ]
+
+          defaults = [
+            shape_label(@duct_shape),
+            @current_diameter.to_s,
+            @current_width.to_s,
+            @current_height.to_s,
+            increment_label(@length_increment)
+          ]
+
+          lists = [
+            "Round|Rectangular",
+            "",
+            "",
+            "",
+            "1/4 inch|1/2 inch|1 inch"
+          ]
+
+          input = ::UI.inputbox(prompts, defaults, lists, "Orthogonal Duct Settings")
+
+          unless input
+            Sketchup.active_model.select_tool(nil)
+            return
+          end
+
+          @duct_shape = normalize_shape(input[0])
+          @current_diameter = InputHelpers.positive_number(input[1], @current_diameter)
+          @current_width = InputHelpers.positive_number(input[2], @current_width)
+          @current_height = InputHelpers.positive_number(input[3], @current_height)
+          @length_increment = normalize_increment(input[4])
+        end
 
         if @duct_shape == :round
           @current_width = @current_diameter

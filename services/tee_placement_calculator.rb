@@ -148,10 +148,30 @@ module DuctExtension
         if dimensions[:shape] == :rectangular
           Geometry::RectangularTeeBuilder.socket_depth(dimensions[:width], dimensions[:height])
         else
-          Geometry::TeeBuilder.socket_depth(dimensions[:diameter])
+          fallback = Geometry::TeeBuilder.socket_depth(dimensions[:diameter])
+          if Catalog::Manager.active?(Sketchup.active_model)
+            product = Catalog::Manager.tee_product(dimensions, Sketchup.active_model)
+            return Catalog::Manager.tee_main_socket_depth(product, fallback) if product
+          end
+          fallback
         end
       rescue
         Model::DuctDimensions.coerce(dimensions).largest * FALLBACK_SOCKET_DEPTH_FACTOR
+      end
+
+      def self.branch_socket_depth(dimensions)
+        if dimensions[:shape] == :rectangular
+          return socket_depth(dimensions)
+        end
+
+        fallback = Geometry::TeeBuilder.socket_depth(dimensions[:diameter])
+        if Catalog::Manager.active?(Sketchup.active_model)
+          product = Catalog::Manager.tee_product(dimensions, Sketchup.active_model)
+          return Catalog::Manager.tee_branch_socket_depth(product, dimensions, fallback) if product
+        end
+        fallback
+      rescue
+        socket_depth(dimensions)
       end
 
       def self.end_clearance_for(dimensions)
@@ -452,7 +472,7 @@ module DuctExtension
       private_class_method :rectangular_branch_vector_candidates
 
       def self.branch_socket_point(center:, branch_vector:, dimensions:, main_vector:, rectangular_basis: nil)
-        depth = socket_depth(dimensions)
+        depth = branch_socket_depth(dimensions)
 
         if dimensions[:shape] == :rectangular
           basis = rectangular_basis || Geometry::RectangularFrame.basis_for_axis(main_vector)
@@ -473,7 +493,7 @@ module DuctExtension
         branch_vector = Geometry::VectorMath.normalized(branch_vector)
         return nil unless branch_vector
 
-        depth = socket_depth(dimensions)
+        depth = dimensions[:shape] == :rectangular ? socket_depth(dimensions) : branch_socket_depth(dimensions)
         vector_length = depth
 
         if dimensions[:shape] == :rectangular

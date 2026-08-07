@@ -444,6 +444,7 @@ module DuctExtension
           model: Sketchup.active_model,
           network: @network,
           stem_port: snapped_port,
+          new_shape: input[:shape],
           new_diameter: input[:diameter],
           new_width: input[:width],
           new_height: input[:height],

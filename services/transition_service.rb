@@ -8,6 +8,16 @@ module DuctExtension
       def self.ask(main_dimensions:, title:, allow_round_from_rectangular: false)
         main = Model::DuctDimensions.coerce(main_dimensions)
 
+        if Catalog::Manager.active?(Sketchup.active_model)
+          family = title.to_s.downcase.include?("wye") ? :wye : :tee
+          return Catalog::Manager.prompt_branch_dimensions(
+            main_dimensions: main,
+            family: family,
+            title: title,
+            model: Sketchup.active_model
+          )
+        end
+
         if main.round?
           input = ::UI.inputbox(
             ["Main Diameter:", "Branch Diameter:"],
@@ -122,11 +132,22 @@ module DuctExtension
           }
         end
 
+        catalog_product = nil
+        if Catalog::Manager.active?(model)
+          catalog_product = Catalog::Manager.transition_product(source_dimensions, target_dimensions, model)
+          return Catalog::Manager.notify_unsupported(:transition, source_dimensions) unless catalog_product
+        end
+
         direction = Geometry::VectorMath.normalized(source_port.outward_vector)
         return nil unless direction
 
         length = length.to_f
-        length = default_branch_length(source_dimensions, target_dimensions) if length <= 0.0
+        if catalog_product
+          fallback_length = default_non_catalog_length(source_dimensions, target_dimensions)
+          length = Catalog::Manager.transition_length(catalog_product, fallback_length)
+        else
+          length = default_branch_length(source_dimensions, target_dimensions) if length <= 0.0
+        end
         return nil if length <= 0.0
 
         start_point = source_port.point
@@ -141,7 +162,7 @@ module DuctExtension
           preferred_height_axis
 
         group = model.active_entities.add_group
-        group.name = transition_group_name(source_dimensions, target_dimensions)
+        group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : transition_group_name(source_dimensions, target_dimensions)
 
         success = Geometry::ReducerBuilder.build_into(
           group,
@@ -202,6 +223,11 @@ module DuctExtension
 
         network.add_piece(piece)
         PieceMetadataService.save_piece(piece)
+        Catalog::Manager.tag_piece(
+          piece,
+          catalog_product,
+          "modeled_transition_length" => length
+        ) if catalog_product
         network.connect_ports(source_port, transition_input)
 
         PortCapService.remove(source_port)
@@ -213,7 +239,8 @@ module DuctExtension
           input_port: transition_input,
           output_port: transition_output,
           source_dimensions: source_dimensions,
-          target_dimensions: target_dimensions
+          target_dimensions: target_dimensions,
+          catalog_product: catalog_product
         }
       rescue => error
         puts "BranchTransitionService.attach failed: #{error.message}"
@@ -223,14 +250,27 @@ module DuctExtension
 
 
       def self.default_branch_length(source_dimensions, target_dimensions)
+        if Catalog::Manager.active?(Sketchup.active_model)
+          product = Catalog::Manager.transition_product(source_dimensions, target_dimensions, Sketchup.active_model)
+          return 0.0 unless product
+          return Catalog::Manager.transition_length(
+            product,
+            default_non_catalog_length(source_dimensions, target_dimensions)
+          )
+        end
+
+        default_non_catalog_length(source_dimensions, target_dimensions)
+      rescue
+        Geometry::ReducerBuilder.default_length(source_dimensions, target_dimensions).to_f
+      end
+
+      def self.default_non_catalog_length(source_dimensions, target_dimensions)
         source = Model::DuctDimensions.coerce(source_dimensions)
         target = Model::DuctDimensions.coerce(target_dimensions, fallback: source)
 
         largest = [source.largest, target.largest].max.to_f
 
         if source.shape != target.shape
-          # Side-takeoff adapters should be squat, like a fabricated
-          # square-to-round boot, rather than a long inline reducer.
           return [largest * 0.75, 4.0].max
         end
 
@@ -299,6 +339,7 @@ module DuctExtension
         model:,
         network:,
         stem_port:,
+        new_shape: nil,
         new_diameter: nil,
         new_width: nil,
         new_height: nil,
@@ -311,6 +352,7 @@ module DuctExtension
         end_dimensions = requested_dimensions(
           stem_port,
           start_dimensions,
+          new_shape: new_shape,
           new_diameter: new_diameter,
           new_width: new_width,
           new_height: new_height
@@ -348,9 +390,10 @@ module DuctExtension
         nil
       end
 
-      def self.requested_dimensions(stem_port, start_dimensions, new_diameter:, new_width:, new_height:)
+      def self.requested_dimensions(stem_port, start_dimensions, new_shape:, new_diameter:, new_width:, new_height:)
+        target_shape = new_shape ? Model::DuctDimensions.normalize_shape(new_shape) : start_dimensions[:shape]
         params =
-          if start_dimensions[:shape] == :rectangular
+          if target_shape == :rectangular
             { shape: :rectangular, width: new_width, height: new_height }
           else
             { shape: :round, diameter: new_diameter }
@@ -362,8 +405,6 @@ module DuctExtension
 
       def self.valid_size_change?(start_dimensions, end_dimensions)
         return false unless start_dimensions && end_dimensions
-        return false unless start_dimensions[:shape] == end_dimensions[:shape]
-
         BranchTransitionService.transition_needed?(start_dimensions, end_dimensions)
       rescue
         false

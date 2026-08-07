@@ -3,6 +3,10 @@ module DuctExtension
   module UIActions
     module_function
 
+    def set_catalog
+      Catalog::Manager.prompt_set_catalog(Sketchup.active_model)
+    end
+
     def draw_duct
       Sketchup.active_model.select_tool(Tool::DuctTool.new)
     end

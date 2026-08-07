@@ -28,6 +28,27 @@ module DuctExtension
         sample_port = selected_pieces.flat_map(&:ports).compact.first
         current = dimensions_for_port(sample_port)
 
+        if Catalog::Manager.active?(Sketchup.active_model)
+          products = Catalog::Manager.pipe_products(shape, Sketchup.active_model)
+          if products.empty?
+            UI.messagebox("No supported Master Flow straight-duct sizes are loaded for this shape.")
+            return nil
+          end
+
+          current_product = Catalog::Manager.pipe_product(current, Sketchup.active_model) || products.first
+          labels = products.map(&:label)
+          input = UI.inputbox(
+            ["New Catalog Duct Product:"],
+            [current_product.label],
+            [labels.join("|")],
+            "Resize Selected Duct — Master Flow"
+          )
+          return nil unless input
+
+          product = products.find { |item| item.label == input[0].to_s } || current_product
+          return Catalog::Manager.dimensions_for_pipe_product(product)
+        end
+
         if shape == :rectangular
           input = UI.inputbox(
             ["New Width:", "New Height:"],
@@ -126,6 +147,20 @@ module DuctExtension
         target_dimensions = SelectionResizePlanner.prompt_for_target_dimensions(shape, selected_pieces)
         return false unless target_dimensions
 
+        if Catalog::Manager.active?(model)
+          unsupported_piece = selected_pieces.find do |piece|
+            !Catalog::Manager.resize_piece_supported?(piece.type, target_dimensions, model)
+          end
+          if unsupported_piece
+            UI.messagebox(
+              "Master Flow catalog mode cannot resize the selected #{unsupported_piece.type} to " +
+              Catalog::Manager.dimensions_label(target_dimensions) +
+              ". No generic replacement was created."
+            )
+            return false
+          end
+        end
+
         selected_set = selected_pieces.each_with_object({}) { |piece, hash| hash[piece.object_id] = true }
         old_dimensions_by_piece = selected_pieces.each_with_object({}) do |piece, hash|
           hash[piece.object_id] = SelectionResizePlanner.dimensions_for_piece(piece)
@@ -175,7 +210,13 @@ module DuctExtension
             operation.abort!(false) unless reducer
           end
 
-          selected_pieces.each { |piece| PieceMetadataService.save_piece(piece) }
+          selected_pieces.each do |piece|
+            PieceMetadataService.save_piece(piece)
+            if Catalog::Manager.active?(model)
+              product = Catalog::Manager.product_for_piece_type(piece.type, target_dimensions, model)
+              Catalog::Manager.tag_piece(piece, product) if product
+            end
+          end
           true
         end
 

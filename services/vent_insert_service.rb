@@ -49,6 +49,18 @@ module DuctExtension
           dimensions: dimensions
         )
 
+        if Catalog::Manager.active?(model)
+          if end_port
+            return Catalog::Manager.notify_unsupported(:end_cover, dimensions) unless
+              Catalog::Manager.end_cover_product(dimensions, model)
+          else
+            # The current Simple Duct side-register primitive does not closely
+            # match a catalog product with a fully specified trunk connection,
+            # so catalog mode deliberately refuses to substitute generic geometry.
+            return Catalog::Manager.notify_unsupported(:side_register, dimensions)
+          end
+        end
+
         ModelOperation.run(
           model: model,
           network: network,
@@ -109,9 +121,13 @@ module DuctExtension
         cover_width: nil,
         cover_height: nil
       )
+        catalog_product = Catalog::Manager.end_cover_product(dimensions, model) if Catalog::Manager.active?(model)
+
         group = model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Duct Cap"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular End Vent Cover"
           else
             "Round End Vent Cover"
@@ -162,6 +178,8 @@ module DuctExtension
           group.erase! if group.valid?
           return nil
         end
+
+        Catalog::Manager.apply_product_metadata(group, catalog_product) if catalog_product
 
         {
           group: group,

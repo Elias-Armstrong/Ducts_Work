@@ -1,4 +1,3 @@
-# ===== Consolidated from: geometry/tee_builder.rb =====
 module DuctExtension
   module Geometry
     module TeeBuilder
@@ -27,7 +26,15 @@ module DuctExtension
         diameter.to_f * SOCKET_DEPTH_FACTOR
       end
 
-      def self.build_into(group, center, main_vector, branch_vector, diameter)
+      def self.build_into(
+        group,
+        center,
+        main_vector,
+        branch_vector,
+        diameter,
+        main_depth: nil,
+        branch_depth: nil
+      )
         return false unless group && group.valid?
 
         center = RectangularFrame.point3d(center)
@@ -39,11 +46,15 @@ module DuctExtension
         return false if diameter <= 0.0
         return false if main_vector.parallel?(branch_vector)
 
-        depth = socket_depth(diameter)
+        default_depth = socket_depth(diameter)
+        main_depth = main_depth.to_f
+        branch_depth = branch_depth.to_f
+        main_depth = default_depth if main_depth <= 0.0
+        branch_depth = default_depth if branch_depth <= 0.0
 
-        main_a = center.offset(main_vector.clone.reverse, depth)
-        main_b = center.offset(main_vector, depth)
-        branch_end = center.offset(branch_vector, depth)
+        main_a = center.offset(main_vector.clone.reverse, main_depth)
+        main_b = center.offset(main_vector, main_depth)
+        branch_end = center.offset(branch_vector, branch_depth)
 
         PipeBuilder.build_into(
           group,

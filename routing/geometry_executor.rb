@@ -64,6 +64,12 @@ module DuctExtension
       def execute_pipe(step)
         dimensions = dimensions_for(step)
 
+        catalog_product = nil
+        if Catalog::Manager.active?(@model)
+          catalog_product = Catalog::Manager.pipe_product(dimensions, @model)
+          return Catalog::Manager.notify_unsupported(:pipe, dimensions) unless catalog_product
+        end
+
         start_point =
           if step[:deferred_start] && @last_port
             @last_port.point
@@ -78,23 +84,121 @@ module DuctExtension
           end
 
         end_point = point3d(step[:end_point])
-
         return nil unless start_point && end_point
 
         vector = start_point.vector_to(end_point)
         return nil if vector.length == 0
-
         vector.normalize!
 
         source_port = step[:source_port]
         frame_source = source_port || @last_port
-
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
+        # A catalog stock section is a real purchasable piece.  If a planned
+        # straight run is longer than that stock length, model it as a chain of
+        # stock pieces instead of labeling one impossible 8-foot object as a
+        # 5-foot CP...X60 product.  The last stock piece is simply cut shorter.
+        stock_length = catalog_product && catalog_product.stock_length.to_f
+        if catalog_product && stock_length > 0.0 && start_point.distance(end_point) > stock_length + 0.001
+          return execute_catalog_pipe_run(
+            start_point: start_point,
+            end_point: end_point,
+            vector: vector,
+            dimensions: dimensions,
+            catalog_product: catalog_product,
+            source_port: source_port,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis
+          )
+        end
+
+        build_pipe_piece(
+          start_point: start_point,
+          end_point: end_point,
+          dimensions: dimensions,
+          catalog_product: catalog_product,
+          source_port: source_port,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis,
+          stock_piece_index: catalog_product ? 1 : nil,
+          stock_piece_count: catalog_product ? 1 : nil
+        )
+      end
+
+      def execute_catalog_pipe_run(
+        start_point:,
+        end_point:,
+        vector:,
+        dimensions:,
+        catalog_product:,
+        source_port:,
+        preferred_width_axis:,
+        preferred_height_axis:
+      )
+        stock_length = catalog_product.stock_length.to_f
+        total_length = start_point.distance(end_point)
+        return nil if stock_length <= 0.0 || total_length <= 0.0
+
+        count = (total_length / stock_length).ceil
+        current_start = start_point
+        remaining = total_length
+        last_piece = nil
+
+        count.times do |index|
+          segment_length = [remaining, stock_length].min
+          segment_end =
+            if index == count - 1
+              end_point
+            else
+              current_start.offset(vector, segment_length)
+            end
+
+          last_piece = build_pipe_piece(
+            start_point: current_start,
+            end_point: segment_end,
+            dimensions: dimensions,
+            catalog_product: catalog_product,
+            source_port: index.zero? ? source_port : nil,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis,
+            stock_piece_index: index + 1,
+            stock_piece_count: count
+          )
+          return nil unless last_piece
+
+          current_start = segment_end
+          remaining -= segment_length
+        end
+
+        last_piece
+      rescue => error
+        puts "GeometryExecutor.execute_catalog_pipe_run failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
+      end
+
+      def build_pipe_piece(
+        start_point:,
+        end_point:,
+        dimensions:,
+        catalog_product:,
+        source_port:,
+        preferred_width_axis:,
+        preferred_height_axis:,
+        stock_piece_index: nil,
+        stock_piece_count: nil
+      )
+        vector = start_point.vector_to(end_point)
+        return nil if vector.length == 0
+        vector.normalize!
+
         group = @model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            suffix = stock_piece_count.to_i > 1 ? " (#{stock_piece_index}/#{stock_piece_count})" : ""
+            "Master Flow #{catalog_product.sku} — Duct Pipe#{suffix}"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
           else
             "Duct Pipe"
@@ -136,9 +240,6 @@ module DuctExtension
 
         basis =
           if dimensions[:shape] == :rectangular
-            # A straight fabricated duct piece preserves one frame from end to end.
-            # stable_basis_for_axis still levels a brand-new free run, but an
-            # inherited frame remains unchanged.
             Geometry::RectangularFrame.stable_basis_for_axis(
               vector,
               dimensions[:width],
@@ -182,16 +283,34 @@ module DuctExtension
         @network.add_piece(piece)
         PieceMetadataService.save_piece(piece)
 
+        if catalog_product
+          Catalog::Manager.tag_piece(
+            piece,
+            catalog_product,
+            "modeled_cut_length" => start_point.distance(end_point),
+            "stock_piece_index" => stock_piece_index,
+            "stock_piece_count" => stock_piece_count
+          )
+        end
+
         connect_source_port(source_port, start_port)
         connect_deferred_port(start_port)
-
         @last_port = end_port
-
         piece
+      rescue => error
+        puts "GeometryExecutor.build_pipe_piece failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
       end
 
       def execute_elbow(step)
         dimensions = dimensions_for(step)
+
+        catalog_product = nil
+        if Catalog::Manager.active?(@model)
+          catalog_product = Catalog::Manager.preferred_elbow(@model, dimensions)
+          return Catalog::Manager.notify_unsupported(:elbow, dimensions) unless catalog_product
+        end
 
         start_point =
           if step[:start_point]
@@ -211,6 +330,7 @@ module DuctExtension
 
         bend_radius = step[:bend_radius].to_f
         bend_radius = default_bend_radius(dimensions) if bend_radius <= 0.0
+        bend_radius = Catalog::Manager.elbow_bend_radius(catalog_product, dimensions, bend_radius) if catalog_product
 
         source_port = step[:source_port]
         frame_source = source_port || @last_port
@@ -239,7 +359,9 @@ module DuctExtension
 
         group = @model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Elbow"
+          elsif dimensions[:shape] == :rectangular
             frame_plan[:relevel] ? "Rectangular Duct Rolled Elbow" : "Rectangular Duct Elbow"
           else
             "Duct Elbow"
@@ -335,6 +457,15 @@ module DuctExtension
 
         @network.add_piece(piece)
         PieceMetadataService.save_piece(piece)
+        if catalog_product
+          angle_degrees = entry_vector.angle_between(exit_vector) * 180.0 / Math::PI
+          Catalog::Manager.tag_piece(
+            piece,
+            catalog_product,
+            "modeled_bend_radius" => bend_radius,
+            "modeled_angle_degrees" => angle_degrees
+          )
+        end
 
         connect_source_port(source_port, start_port)
         connect_deferred_port(start_port)
@@ -349,6 +480,12 @@ module DuctExtension
         end_dimensions = reducer_end_dimensions_for(step)
 
         return nil unless start_dimensions && end_dimensions
+
+        catalog_product = nil
+        if Catalog::Manager.active?(@model)
+          catalog_product = Catalog::Manager.transition_product(start_dimensions, end_dimensions, @model)
+          return Catalog::Manager.notify_unsupported(:transition, start_dimensions) unless catalog_product
+        end
 
         start_point =
           if step[:deferred_start] && @last_port
@@ -382,7 +519,7 @@ module DuctExtension
           step[:preferred_height_axis] || frame_source_height_axis(frame_source)
 
         group = @model.active_entities.add_group
-        group.name = reducer_group_name(start_dimensions, end_dimensions)
+        group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : reducer_group_name(start_dimensions, end_dimensions)
 
         success = Geometry::ReducerBuilder.build_into(
           group,
@@ -443,6 +580,11 @@ module DuctExtension
 
         @network.add_piece(piece)
         PieceMetadataService.save_piece(piece)
+        Catalog::Manager.tag_piece(
+          piece,
+          catalog_product,
+          "modeled_transition_length" => start_point.distance(end_point)
+        ) if catalog_product
 
         connect_source_port(source_port, start_port)
         connect_deferred_port(start_port)

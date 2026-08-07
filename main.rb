@@ -11,6 +11,9 @@ module DuctExtension
   module Tool
   end
 
+  module Catalog
+  end
+
   @model_networks ||= {}
   @network_validation_enabled = false if @network_validation_enabled.nil?
 
@@ -34,6 +37,10 @@ require_relative 'geometry/vector_math'
 require_relative 'model/duct_dimensions'
 require_relative 'model/topology'
 require_relative 'model/network'
+
+# ===== CATALOGS =====
+require_relative 'catalog/master_flow'
+require_relative 'catalog/manager'
 
 # ===== GEOMETRY =====
 require_relative 'geometry/primitive_helpers'
@@ -104,6 +111,8 @@ module CustomDuctExtension
   unless @simple_duct_menu_created
     menu = UI.menu("Plugins").add_submenu("Simple Duct Extension")
 
+    menu.add_item("Set Catalog...") { DuctExtension::UIActions.set_catalog }
+    menu.add_separator
     menu.add_item("Draw Orthogonal Duct") { DuctExtension::UIActions.draw_duct }
     menu.add_item("Resize Selected Duct Pieces") { DuctExtension::UIActions.resize_selection }
     menu.add_item("Add Increaser / Reducer") { DuctExtension::UIActions.add_reducer }
@@ -113,3 +122,4 @@ module CustomDuctExtension
     file_loaded(__FILE__) unless file_loaded?(__FILE__)
   end
 end
+

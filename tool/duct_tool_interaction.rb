@@ -43,6 +43,10 @@ module DuctExtension
       private
 
       def populate_duct_tool_menu(menu, _flags, _x, _y, _view)
+        menu.add_item("Catalog: #{Catalog::Manager.active_name(Sketchup.active_model)}...") {
+          Catalog::Manager.prompt_set_catalog(Sketchup.active_model)
+        }
+        menu.add_separator
         add_mode_menu_items(menu)
         menu.add_separator
         add_component_menu(menu)

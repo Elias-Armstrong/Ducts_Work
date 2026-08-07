@@ -10,6 +10,12 @@ module DuctExtension
         return nil unless stem_port.piece.group && stem_port.piece.group.valid?
 
         main_dimensions = Model::Port.dimensions_from_params({}, stem_port)
+        catalog_product = nil
+        if Catalog::Manager.active?(model)
+          catalog_product = Catalog::Manager.wye_product(main_dimensions, model)
+          return Catalog::Manager.notify_unsupported(:wye, main_dimensions) unless catalog_product
+        end
+
         requested_branch_dimensions = prompt_for_branch_dimensions(main_dimensions)
         return nil unless requested_branch_dimensions
 
@@ -66,7 +72,9 @@ module DuctExtension
         ) do |operation|
           group = model.active_entities.add_group
           group.name =
-            if mixed_side_takeoff
+            if catalog_product
+              "Master Flow #{catalog_product.sku} — End Wye"
+            elsif mixed_side_takeoff
               "Rectangular to Round Side Takeoff"
             elsif main_dimensions[:shape] == :rectangular
               "Rectangular End Wye"
@@ -183,6 +191,7 @@ module DuctExtension
             fitting_stem_port: fitting_stem_port,
             outlet_ports: [forward_port]
           )
+          Catalog::Manager.tag_piece(piece, catalog_product) if catalog_product
 
           transition = BranchTransitionService.attach(
             model: model,

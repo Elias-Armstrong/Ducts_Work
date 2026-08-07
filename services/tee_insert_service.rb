@@ -13,6 +13,16 @@ module DuctExtension
         old_port_b = pipe_piece.ports[1]
 
         dimensions = Model::Port.dimensions_from_params({}, old_port_a)
+        catalog_product = nil
+        catalog_pipe_product = nil
+        if Catalog::Manager.active?(model)
+          catalog_product = Catalog::Manager.tee_product(dimensions, model)
+          return Catalog::Manager.notify_unsupported(:tee, dimensions) unless catalog_product
+
+          catalog_pipe_product = Catalog::Manager.pipe_product(dimensions, model)
+          return Catalog::Manager.notify_unsupported(:pipe, dimensions) unless catalog_pipe_product
+        end
+
         requested_branch_dimensions = Model::DuctDimensions.coerce(
           branch_dimensions || dimensions,
           fallback: dimensions
@@ -60,6 +70,7 @@ module DuctExtension
         return nil if main_vector.parallel?(branch_vector)
 
         socket_depth = TeePlacementCalculator.socket_depth(dimensions)
+        branch_socket_depth = TeePlacementCalculator.branch_socket_depth(dimensions)
 
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
         main_end_socket = center.offset(main_vector, socket_depth)
@@ -91,8 +102,11 @@ module DuctExtension
             branch_vector: branch_vector,
             dimensions: dimensions,
             socket_depth: socket_depth,
+            branch_socket_depth: branch_socket_depth,
             rectangular_basis: rectangular_basis,
             requested_branch_dimensions: requested_branch_dimensions,
+            catalog_product: catalog_product,
+            catalog_pipe_product: catalog_pipe_product,
             external_neighbors_a: external_neighbors_a,
             external_neighbors_b: external_neighbors_b
           )
@@ -139,8 +153,11 @@ module DuctExtension
         branch_vector:,
         dimensions:,
         socket_depth:,
+        branch_socket_depth:,
         rectangular_basis: nil,
         requested_branch_dimensions: nil,
+        catalog_product: nil,
+        catalog_pipe_product: nil,
         external_neighbors_a: [],
         external_neighbors_b: []
       )
@@ -160,7 +177,7 @@ module DuctExtension
             center
           end
 
-        branch_socket = branch_base.offset(branch_vector, socket_depth)
+        branch_socket = branch_base.offset(branch_vector, branch_socket_depth)
 
         pipe_a = build_pipe_piece(
           model: model,
@@ -168,6 +185,7 @@ module DuctExtension
           start_point: point_a,
           end_point: main_start_socket,
           dimensions: dimensions,
+          catalog_product: catalog_pipe_product,
           preferred_width_axis: rectangular_basis && rectangular_basis[:width_axis],
           preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis]
         )
@@ -178,6 +196,7 @@ module DuctExtension
           start_point: main_end_socket,
           end_point: point_b,
           dimensions: dimensions,
+          catalog_product: catalog_pipe_product,
           preferred_width_axis: rectangular_basis && rectangular_basis[:width_axis],
           preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis]
         )
@@ -186,7 +205,9 @@ module DuctExtension
 
         tee_group = model.active_entities.add_group
         tee_group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Duct Tee"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Tee"
           else
             "Duct Tee"
@@ -212,7 +233,9 @@ module DuctExtension
               center,
               main_vector,
               branch_vector,
-              dimensions[:diameter]
+              dimensions[:diameter],
+              main_depth: socket_depth,
+              branch_depth: branch_socket_depth
             )
           end
 
@@ -271,6 +294,7 @@ module DuctExtension
 
         network.add_piece(tee_piece)
         PieceMetadataService.save_piece(tee_piece)
+        Catalog::Manager.tag_piece(tee_piece, catalog_product) if catalog_product
 
         network.connect_ports(pipe_a.ports[1], main_start_port)
         network.connect_ports(pipe_b.ports[0], main_end_port)
@@ -309,6 +333,7 @@ module DuctExtension
         start_point:,
         end_point:,
         dimensions:,
+        catalog_product: nil,
         preferred_width_axis: nil,
         preferred_height_axis: nil
       )
@@ -319,7 +344,9 @@ module DuctExtension
 
         group = model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Duct Pipe"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
           else
             "Duct Pipe"
@@ -399,6 +426,11 @@ module DuctExtension
 
         network.add_piece(piece)
         PieceMetadataService.save_piece(piece)
+        Catalog::Manager.tag_piece(
+          piece,
+          catalog_product,
+          "modeled_cut_length" => start_point.distance(end_point)
+        ) if catalog_product
 
         piece
       end

@@ -312,11 +312,19 @@ module DuctExtension
       end
 
       def self.bend_radius_for(dimensions)
-        if dimensions[:shape] == :rectangular
-          [dimensions[:width].to_f, dimensions[:height].to_f].max * DEFAULT_BEND_RADIUS_FACTOR
-        else
-          dimensions[:diameter].to_f * DEFAULT_BEND_RADIUS_FACTOR
+        fallback =
+          if dimensions[:shape] == :rectangular
+            [dimensions[:width].to_f, dimensions[:height].to_f].max * DEFAULT_BEND_RADIUS_FACTOR
+          else
+            dimensions[:diameter].to_f * DEFAULT_BEND_RADIUS_FACTOR
+          end
+
+        if Catalog::Manager.active?(Sketchup.active_model)
+          product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+          return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback) if product
         end
+
+        fallback
       end
 
       def self.tee_exit_stub_length_for(dimensions)

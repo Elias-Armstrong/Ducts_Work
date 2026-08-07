@@ -12,6 +12,25 @@ module DuctExtension
       class << self
         def prompt_for_port(port)
           dimensions = Model::Port.dimensions_from_params({}, port)
+
+          if Catalog::Manager.active?(Sketchup.active_model)
+            selection = Catalog::Manager.prompt_transition_target(
+              dimensions,
+              title: "Master Flow Increaser / Reducer",
+              model: Sketchup.active_model
+            )
+            return nil unless selection
+
+            target = Model::DuctDimensions.coerce(selection[:dimensions])
+            return {
+              shape: target[:shape],
+              diameter: target[:diameter],
+              width: target[:width],
+              height: target[:height],
+              length: selection[:length]
+            }
+          end
+
           dimensions[:shape] == :rectangular ? prompt_rectangular(dimensions) : prompt_round(dimensions)
         end
 
@@ -39,7 +58,7 @@ module DuctExtension
 
           @last_round_diameter = diameter
           @last_length = length
-          { diameter: diameter, width: diameter, height: diameter, length: length }
+          { shape: :round, diameter: diameter, width: diameter, height: diameter, length: length }
         end
 
         def prompt_rectangular(dimensions)
@@ -79,7 +98,7 @@ module DuctExtension
           @last_rectangular_width = width
           @last_rectangular_height = height
           @last_length = length
-          { diameter: [width, height].max, width: width, height: height, length: length }
+          { shape: :rectangular, diameter: [width, height].max, width: width, height: height, length: length }
         end
 
         def length_default(default_length)
@@ -156,6 +175,7 @@ module DuctExtension
           model: Sketchup.active_model,
           network: @network,
           stem_port: port,
+          new_shape: input[:shape],
           new_diameter: input[:diameter],
           new_width: input[:width],
           new_height: input[:height],

@@ -102,7 +102,12 @@ module DuctExtension
         end
 
         def self.bend_radius_for(dimensions)
-          Model::DuctDimensions.coerce(dimensions).largest * DEFAULT_BEND_RADIUS_FACTOR
+          fallback = Model::DuctDimensions.coerce(dimensions).largest * DEFAULT_BEND_RADIUS_FACTOR
+          if Catalog::Manager.active?(Sketchup.active_model)
+            product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+            return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback) if product
+          end
+          fallback
         end
 
         def self.valid_elbow_angle?(angle)

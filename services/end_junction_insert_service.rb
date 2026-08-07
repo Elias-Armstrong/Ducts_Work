@@ -1,4 +1,3 @@
-# ===== Consolidated from: services/end_tee_insert_service.rb =====
 module DuctExtension
   module Services
     class EndTeeInsertService
@@ -11,6 +10,11 @@ module DuctExtension
         return nil unless stem_port.piece.group && stem_port.piece.group.valid?
 
         dimensions = Model::Port.dimensions_from_params({}, stem_port)
+        catalog_product = nil
+        if Catalog::Manager.active?(model)
+          catalog_product = Catalog::Manager.tee_product(dimensions, model)
+          return Catalog::Manager.notify_unsupported(:tee, dimensions) unless catalog_product
+        end
 
         stem_out = stem_port.outward_vector.clone
         return nil if stem_out.length == 0
@@ -29,6 +33,17 @@ module DuctExtension
           rectangular_builder: Geometry::RectangularTeeBuilder,
           fallback_factor: FALLBACK_SOCKET_DEPTH_FACTOR
         )
+
+        main_socket_depth = socket_depth
+        branch_socket_depth = socket_depth
+        if catalog_product && dimensions[:shape] == :round
+          main_socket_depth = Catalog::Manager.tee_main_socket_depth(catalog_product, socket_depth)
+          branch_socket_depth = Catalog::Manager.tee_branch_socket_depth(
+            catalog_product,
+            dimensions,
+            socket_depth
+          )
+        end
 
         main_width_axis = nil
         main_height_axis = nil
@@ -64,12 +79,12 @@ module DuctExtension
           center = stem_port.point.offset(stem_out, socket_depth + face_offset)
           branch_base = center.offset(stem_into_tee, face_offset)
         else
-          center = stem_port.point.offset(stem_out, socket_depth)
+          center = stem_port.point.offset(stem_out, branch_socket_depth)
           branch_base = center
         end
 
-        left_socket = center.offset(branch_axis.clone.reverse, socket_depth)
-        right_socket = center.offset(branch_axis, socket_depth)
+        left_socket = center.offset(branch_axis.clone.reverse, main_socket_depth)
+        right_socket = center.offset(branch_axis, main_socket_depth)
         stem_socket = stem_port.point
 
         stem_into_tee = stem_out.clone.reverse
@@ -82,7 +97,9 @@ module DuctExtension
 
         group = model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — End Tee"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular End Tee"
           else
             "End Tee"
@@ -108,7 +125,9 @@ module DuctExtension
               center,
               branch_axis,
               stem_into_tee,
-              dimensions[:diameter]
+              dimensions[:diameter],
+              main_depth: main_socket_depth,
+              branch_depth: branch_socket_depth
             )
           end
 
@@ -192,6 +211,7 @@ module DuctExtension
           fitting_stem_port: tee_stem_port,
           outlet_ports: [left_port, right_port]
         )
+        Catalog::Manager.tag_piece(tee_piece, catalog_product) if catalog_product
 
         {
           tee_piece: tee_piece,
@@ -230,6 +250,9 @@ module DuctExtension
         return nil unless stem_port.piece.group && stem_port.piece.group.valid?
 
         dimensions = Model::Port.dimensions_from_params({}, stem_port)
+        if Catalog::Manager.active?(model)
+          return Catalog::Manager.notify_unsupported(:cross, dimensions)
+        end
         branch_dimensions = prompt_for_branch_dimensions(dimensions)
         return nil unless branch_dimensions
 
