@@ -82,8 +82,7 @@ module DuctExtension
         return nil unless start_point && end_point
 
         vector = start_point.vector_to(end_point)
-        total_length = vector.length
-        return nil if total_length == 0
+        return nil if vector.length == 0
 
         vector.normalize!
 
@@ -93,27 +92,10 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
-        frame_plan =
-          if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.straight_run_plan(
-              axis: vector,
-              length: total_length,
-              width: dimensions[:width],
-              height: dimensions[:height],
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis,
-              allow_relevel: true
-            )
-          else
-            nil
-          end
-
-        return nil if dimensions[:shape] == :rectangular && !frame_plan
-
         group = @model.active_entities.add_group
         group.name =
           if dimensions[:shape] == :rectangular
-            frame_plan[:relevel] ? "Rectangular Duct Roll Transition" : "Rectangular Duct Pipe"
+            "Rectangular Duct Pipe"
           else
             "Duct Pipe"
           end
@@ -132,8 +114,7 @@ module DuctExtension
               cap_end: false,
               preferred_width_axis: preferred_width_axis,
               preferred_height_axis: preferred_height_axis,
-              allow_relevel: true,
-              frame_plan: frame_plan
+              allow_relevel: true
             )
           else
             Geometry::PipeBuilder.build_into(
@@ -153,8 +134,22 @@ module DuctExtension
           return nil
         end
 
-        start_basis = frame_plan && frame_plan[:start_basis]
-        end_basis = frame_plan && frame_plan[:end_basis]
+        basis =
+          if dimensions[:shape] == :rectangular
+            # A straight fabricated duct piece preserves one frame from end to end.
+            # stable_basis_for_axis still levels a brand-new free run, but an
+            # inherited frame remains unchanged.
+            Geometry::RectangularFrame.stable_basis_for_axis(
+              vector,
+              dimensions[:width],
+              dimensions[:height],
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true
+            )
+          else
+            nil
+          end
 
         start_port = Model::Port.new(
           point: start_point,
@@ -163,8 +158,8 @@ module DuctExtension
           shape: dimensions[:shape],
           width: dimensions[:width],
           height: dimensions[:height],
-          width_axis: start_basis && start_basis[:width_axis],
-          height_axis: start_basis && start_basis[:height_axis]
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
         )
 
         end_port = Model::Port.new(
@@ -174,8 +169,8 @@ module DuctExtension
           shape: dimensions[:shape],
           width: dimensions[:width],
           height: dimensions[:height],
-          width_axis: end_basis && end_basis[:width_axis],
-          height_axis: end_basis && end_basis[:height_axis]
+          width_axis: basis && basis[:width_axis],
+          height_axis: basis && basis[:height_axis]
         )
 
         piece = Model::DuctPiece.new(
@@ -223,10 +218,29 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
+        frame_plan =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.frame_plan(
+              start_point: start_point,
+              entry_vector: entry_vector,
+              exit_vector: exit_vector,
+              bend_radius: bend_radius,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              width: dimensions[:width],
+              height: dimensions[:height],
+              allow_relevel: true
+            )
+          else
+            nil
+          end
+
+        return nil if dimensions[:shape] == :rectangular && !frame_plan
+
         group = @model.active_entities.add_group
         group.name =
           if dimensions[:shape] == :rectangular
-            "Rectangular Duct Elbow"
+            frame_plan[:relevel] ? "Rectangular Duct Rolled Elbow" : "Rectangular Duct Elbow"
           else
             "Duct Elbow"
           end
@@ -244,7 +258,9 @@ module DuctExtension
               cap_start: false,
               cap_end: false,
               preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true,
+              frame_plan: frame_plan
             )
           else
             Geometry::ElbowBuilder.build_into(
@@ -286,36 +302,8 @@ module DuctExtension
           return nil
         end
 
-        start_basis =
-          if dimensions[:shape] == :rectangular
-            Geometry::RectangularFrame.stable_basis_for_axis(
-              entry_vector,
-              dimensions[:width],
-              dimensions[:height],
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis,
-              allow_relevel: false
-            )
-          else
-            nil
-          end
-
-        end_basis =
-          if dimensions[:shape] == :rectangular
-            Geometry::RectangularElbowBuilder.exit_basis(
-              start_point: start_point,
-              entry_vector: entry_vector,
-              exit_vector: exit_vector,
-              bend_radius: bend_radius,
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis,
-              width: dimensions[:width],
-              height: dimensions[:height],
-              allow_relevel: false
-            )
-          else
-            nil
-          end
+        start_basis = frame_plan && frame_plan[:start_basis]
+        end_basis = frame_plan && frame_plan[:end_basis]
 
         start_port = Model::Port.new(
           point: start_point,
