@@ -82,10 +82,6 @@ module DuctExtension
         )
         return { status: :no_piece } unless piece
 
-        if Catalog::Manager.catalog_locked_piece?(piece)
-          return { status: :catalog_locked, piece: piece }
-        end
-
         unless SWINGABLE_TYPES.include?(piece.type.to_sym)
           return { status: :not_swingable, piece: piece }
         end

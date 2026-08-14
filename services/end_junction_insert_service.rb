@@ -1,4 +1,3 @@
-# ===== Consolidated from: services/end_tee_insert_service.rb =====
 module DuctExtension
   module Services
     class EndTeeInsertService
@@ -121,27 +120,15 @@ module DuctExtension
               preferred_main_height_axis: main_height_axis
             )
           else
-            if catalog_product
-              Catalog::MasterFlowGeometry.build_round_tee(
-                group: group,
-                center: center,
-                main_vector: branch_axis,
-                branch_vector: stem_into_tee,
-                diameter: dimensions[:diameter],
-                main_depth: main_socket_depth,
-                branch_depth: branch_socket_depth
-              )
-            else
-              Geometry::TeeBuilder.build_into(
-                group,
-                center,
-                branch_axis,
-                stem_into_tee,
-                dimensions[:diameter],
-                main_depth: main_socket_depth,
-                branch_depth: branch_socket_depth
-              )
-            end
+            Geometry::TeeBuilder.build_into(
+              group,
+              center,
+              branch_axis,
+              stem_into_tee,
+              dimensions[:diameter],
+              main_depth: main_socket_depth,
+              branch_depth: branch_socket_depth
+            )
           end
 
         unless success

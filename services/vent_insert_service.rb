@@ -153,45 +153,25 @@ module DuctExtension
             width_axis = basis && basis[:width_axis]
             height_axis = basis && basis[:height_axis]
 
-            if catalog_product
-              Catalog::MasterFlowGeometry.build_stack_cap(
-                group: group,
-                center: end_port.point,
-                axis: outward_axis,
-                product: catalog_product,
-                preferred_width_axis: width_axis,
-                preferred_height_axis: height_axis
-              )
-            else
-              Geometry::VentBuilder.build_rectangular_end_cover_into(
-                group,
-                center: end_port.point,
-                axis: outward_axis,
-                width: dimensions[:width],
-                height: dimensions[:height],
-                width_axis: width_axis,
-                height_axis: height_axis,
-                cover_width: cover_width,
-                cover_height: cover_height
-              )
-            end
+            Geometry::VentBuilder.build_rectangular_end_cover_into(
+              group,
+              center: end_port.point,
+              axis: outward_axis,
+              width: dimensions[:width],
+              height: dimensions[:height],
+              width_axis: width_axis,
+              height_axis: height_axis,
+              cover_width: cover_width,
+              cover_height: cover_height
+            )
           else
-            if catalog_product
-              Catalog::MasterFlowGeometry.build_round_cap(
-                group: group,
-                center: end_port.point,
-                axis: outward_axis,
-                product: catalog_product
-              )
-            else
-              Geometry::VentBuilder.build_round_end_cover_into(
-                group,
-                center: end_port.point,
-                axis: outward_axis,
-                duct_diameter: dimensions[:diameter],
-                cover_diameter: cover_diameter
-              )
-            end
+            Geometry::VentBuilder.build_round_end_cover_into(
+              group,
+              center: end_port.point,
+              axis: outward_axis,
+              duct_diameter: dimensions[:diameter],
+              cover_diameter: cover_diameter
+            )
           end
 
         unless success

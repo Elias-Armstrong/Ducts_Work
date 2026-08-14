@@ -205,17 +205,7 @@ module DuctExtension
           end
 
         success =
-          if catalog_product
-            Catalog::MasterFlowGeometry.build_pipe(
-              group: group,
-              start_point: start_point,
-              end_point: end_point,
-              dimensions: dimensions,
-              product: catalog_product,
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis
-            )
-          elsif dimensions[:shape] == :rectangular
+          if dimensions[:shape] == :rectangular
             Geometry::RectangularPipeBuilder.build_into(
               group,
               start_point,
@@ -256,7 +246,7 @@ module DuctExtension
               dimensions[:height],
               preferred_width_axis: preferred_width_axis,
               preferred_height_axis: preferred_height_axis,
-              allow_relevel: !catalog_product
+              allow_relevel: true
             )
           else
             nil
@@ -348,119 +338,90 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
-        frame_plan = nil
-        end_point = nil
+        frame_plan =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.frame_plan(
+              start_point: start_point,
+              entry_vector: entry_vector,
+              exit_vector: exit_vector,
+              bend_radius: bend_radius,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              width: dimensions[:width],
+              height: dimensions[:height],
+              allow_relevel: true
+            )
+          else
+            nil
+          end
+
+        return nil if dimensions[:shape] == :rectangular && !frame_plan
 
         group = @model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Rigid Catalog Elbow"
+            "Master Flow #{catalog_product.sku} — Elbow"
           elsif dimensions[:shape] == :rectangular
-            "Rectangular Duct Elbow"
+            frame_plan[:relevel] ? "Rectangular Duct Rolled Elbow" : "Rectangular Duct Elbow"
           else
             "Duct Elbow"
           end
 
-        if catalog_product
-          catalog_result = Catalog::MasterFlowGeometry.build_elbow(
-            group: group,
-            start_point: start_point,
-            entry_vector: entry_vector,
-            exit_vector: exit_vector,
-            dimensions: dimensions,
-            product: catalog_product,
-            preferred_width_axis: preferred_width_axis,
-            preferred_height_axis: preferred_height_axis
-          )
-
-          unless catalog_result
-            group.erase! if group.valid?
-            return nil
+        success =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.build_into(
+              group,
+              start_point,
+              entry_vector,
+              exit_vector,
+              dimensions[:width],
+              dimensions[:height],
+              bend_radius,
+              cap_start: false,
+              cap_end: false,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              allow_relevel: true,
+              frame_plan: frame_plan
+            )
+          else
+            Geometry::ElbowBuilder.build_into(
+              group,
+              start_point,
+              entry_vector,
+              exit_vector,
+              dimensions[:diameter],
+              bend_radius,
+              cap_start: false,
+              cap_end: false
+            )
           end
 
-          end_point = catalog_result[:end_point]
-          frame_plan = {
-            start_basis: catalog_result[:start_basis],
-            end_basis: catalog_result[:end_basis],
-            relevel: false
-          }
-          bend_radius = catalog_result[:bend_radius].to_f if catalog_result[:bend_radius]
-        else
-          frame_plan =
-            if dimensions[:shape] == :rectangular
-              Geometry::RectangularElbowBuilder.frame_plan(
-                start_point: start_point,
-                entry_vector: entry_vector,
-                exit_vector: exit_vector,
-                bend_radius: bend_radius,
-                preferred_width_axis: preferred_width_axis,
-                preferred_height_axis: preferred_height_axis,
-                width: dimensions[:width],
-                height: dimensions[:height],
-                allow_relevel: true
-              )
-            else
-              nil
-            end
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
 
-          return nil if dimensions[:shape] == :rectangular && !frame_plan
-
-          success =
-            if dimensions[:shape] == :rectangular
-              Geometry::RectangularElbowBuilder.build_into(
-                group,
-                start_point,
-                entry_vector,
-                exit_vector,
-                dimensions[:width],
-                dimensions[:height],
-                bend_radius,
-                cap_start: false,
-                cap_end: false,
-                preferred_width_axis: preferred_width_axis,
-                preferred_height_axis: preferred_height_axis,
-                allow_relevel: true,
-                frame_plan: frame_plan
-              )
-            else
-              Geometry::ElbowBuilder.build_into(
-                group,
-                start_point,
-                entry_vector,
-                exit_vector,
-                dimensions[:diameter],
-                bend_radius,
-                cap_start: false,
-                cap_end: false
-              )
-            end
-
-          unless success
-            group.erase! if group.valid?
-            return nil
+        end_point =
+          if dimensions[:shape] == :rectangular
+            Geometry::RectangularElbowBuilder.exit_point(
+              start_point,
+              entry_vector,
+              exit_vector,
+              bend_radius
+            )
+          else
+            Geometry::ElbowBuilder.exit_point(
+              start_point,
+              entry_vector,
+              exit_vector,
+              bend_radius
+            )
           end
 
-          end_point =
-            if dimensions[:shape] == :rectangular
-              Geometry::RectangularElbowBuilder.exit_point(
-                start_point,
-                entry_vector,
-                exit_vector,
-                bend_radius
-              )
-            else
-              Geometry::ElbowBuilder.exit_point(
-                start_point,
-                entry_vector,
-                exit_vector,
-                bend_radius
-              )
-            end
-
-          unless end_point
-            group.erase! if group.valid?
-            return nil
-          end
+        unless end_point
+          group.erase! if group.valid?
+          return nil
         end
 
         start_basis = frame_plan && frame_plan[:start_basis]
@@ -560,29 +521,15 @@ module DuctExtension
         group = @model.active_entities.add_group
         group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : reducer_group_name(start_dimensions, end_dimensions)
 
-        success =
-          if catalog_product
-            Catalog::MasterFlowGeometry.build_transition(
-              group: group,
-              start_point: start_point,
-              end_point: end_point,
-              start_dimensions: start_dimensions,
-              end_dimensions: end_dimensions,
-              product: catalog_product,
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis
-            )
-          else
-            Geometry::ReducerBuilder.build_into(
-              group,
-              start_point,
-              end_point,
-              start_dimensions: start_dimensions,
-              end_dimensions: end_dimensions,
-              preferred_width_axis: preferred_width_axis,
-              preferred_height_axis: preferred_height_axis
-            )
-          end
+        success = Geometry::ReducerBuilder.build_into(
+          group,
+          start_point,
+          end_point,
+          start_dimensions: start_dimensions,
+          end_dimensions: end_dimensions,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis
+        )
 
         unless success
           group.erase! if group.valid?

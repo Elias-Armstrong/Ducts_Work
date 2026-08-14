@@ -1,4 +1,3 @@
-# ===== Consolidated from: services/pipe_connection_service.rb =====
 module DuctExtension
   module Services
     module PipeTargetConnectionService

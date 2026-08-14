@@ -125,17 +125,6 @@ module DuctExtension
           return false
         end
 
-        catalog_piece = selected_pieces.find { |piece| Catalog::Manager.catalog_locked_piece?(piece) }
-        if catalog_piece
-          sku = catalog_piece.group.get_attribute(Catalog::Manager::DICTIONARY, "model_number").to_s
-          label = sku.empty? ? "catalog piece" : "Master Flow #{sku}"
-          UI.messagebox(
-            "#{label} is a stocked catalog component and its dimensions are locked.\n\n" \
-            "Catalog pieces cannot be resized or reshaped in place. Add a real catalog reducer/converter and continue with a different catalog size instead."
-          )
-          return false
-        end
-
         unsupported = selected_pieces.reject { |piece| SUPPORTED_TYPES.include?(piece.type.to_sym) }
         unless unsupported.empty?
           types = unsupported.map { |piece| piece.type.to_s }.uniq.sort.join(", ")

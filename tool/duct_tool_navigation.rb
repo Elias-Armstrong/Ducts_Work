@@ -370,10 +370,6 @@ module DuctExtension
       end
 
       def update_status_for_current_shape
-        if Catalog::Manager.active?(Sketchup.active_model) && respond_to?(:update_catalog_status, true)
-          return update_catalog_status
-        end
-
         increment_text = increment_label(@length_increment)
         axis_lock_text = orthogonal_axis_lock_label
         lock_suffix = axis_lock_text ? " #{axis_lock_text}." : ""

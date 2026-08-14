@@ -276,15 +276,6 @@ module DuctExtension
             "Disconnect the side branch first, then Ctrl-drag the connector again."
           )
           false
-        when :catalog_locked
-          piece = result[:piece]
-          sku = piece && piece.group && piece.group.get_attribute(Catalog::Manager::DICTIONARY, "model_number").to_s
-          label = sku.to_s.empty? ? "This catalog fitting" : "Master Flow #{sku}"
-          ::UI.messagebox(
-            "#{label} is a rigid stocked fitting.\n\n" \
-            "Catalog fittings cannot be swung or reshaped after placement. Choose the orientation while placing the fitting."
-          )
-          false
         when :not_swingable
           Sketchup.status_text = "Only tees, crosses, and wyes can be swung right now."
           false
@@ -435,7 +426,6 @@ module DuctExtension
         @orthogonal_axis_lock = nil
         copy_dimensions_from_port(dimension_port) if dimension_port
         @fitting_mode = :elbow
-        reset_catalog_workflow! if respond_to?(:reset_catalog_workflow!, true)
         @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
       end
 
@@ -507,17 +497,12 @@ module DuctExtension
           pipe_piece: pipe_piece,
           tap_point: point,
           branch_direction: branch_direction,
-          branch_dimensions:
-            if Catalog::Manager.active?(Sketchup.active_model)
-              dimensions
-            else
-              {
-                shape: @duct_shape,
-                diameter: @current_diameter,
-                width: @current_width,
-                height: @current_height
-              }
-            end
+          branch_dimensions: {
+            shape: @duct_shape,
+            diameter: @current_diameter,
+            width: @current_width,
+            height: @current_height
+          }
         )
 
         unless result
@@ -530,7 +515,6 @@ module DuctExtension
         @orthogonal_axis_lock = nil
         copy_dimensions_from_port(@last_port)
         @fitting_mode = :elbow
-        @catalog_phase = :run if Catalog::Manager.active?(Sketchup.active_model)
 
         @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
 

@@ -10,18 +10,12 @@ module DuctExtension
         return nil unless stem_port.piece.group && stem_port.piece.group.valid?
 
         main_dimensions = Model::Port.dimensions_from_params({}, stem_port)
-
+        catalog_product = nil
         if Catalog::Manager.active?(model)
-          return insert_catalog_wye(
-            model: model,
-            network: network,
-            stem_port: stem_port,
-            side_vector: side_vector,
-            main_dimensions: main_dimensions
-          )
+          catalog_product = Catalog::Manager.wye_product(main_dimensions, model)
+          return Catalog::Manager.notify_unsupported(:wye, main_dimensions) unless catalog_product
         end
 
-        catalog_product = nil
         requested_branch_dimensions = prompt_for_branch_dimensions(main_dimensions)
         return nil unless requested_branch_dimensions
 
@@ -228,124 +222,6 @@ module DuctExtension
         puts error.backtrace.join("\n")
         nil
       end
-
-      def self.insert_catalog_wye(model:, network:, stem_port:, side_vector:, main_dimensions:)
-        return Catalog::Manager.notify_unsupported(:wye, main_dimensions) unless main_dimensions[:shape] == :round
-
-        product = Catalog::Manager.prompt_junction_product(
-          main_dimensions: main_dimensions,
-          family: :wye,
-          title: "Master Flow Wye",
-          model: model
-        )
-        return nil unless product
-
-        forward_vector = Geometry::VectorMath.normalized(stem_port.outward_vector)
-        return nil unless forward_vector
-
-        frame = EndFittingSupport.frame_for_stem_port(
-          stem_port: stem_port,
-          side_vector: side_vector,
-          forward_vector: forward_vector,
-          dimensions: main_dimensions
-        )
-        return nil unless frame
-
-        layout = Catalog::MasterFlowGeometry.wye_layout(
-          stem_point: stem_port.point,
-          forward_vector: forward_vector,
-          side_axis: frame[:side_axis],
-          product: product
-        )
-        return nil unless layout
-
-        output_dimensions = Catalog::Manager.wye_output_dimensions(product)
-        return nil unless output_dimensions
-        stem_into_fitting = forward_vector.clone.reverse
-
-        ModelOperation.run(
-          model: model,
-          network: network,
-          name: "Insert Master Flow Wye"
-        ) do |operation|
-          group = model.active_entities.add_group
-          group.name = "Master Flow #{product.sku} — Wye"
-
-          success = Catalog::MasterFlowGeometry.build_round_wye(
-            group: group,
-            layout: layout,
-            product: product
-          )
-          unless success
-            group.erase! if group.valid?
-            operation.abort!(nil)
-          end
-
-          fitting_stem_port = Model::Port.new(
-            point: layout[:stem_socket],
-            vector: stem_into_fitting,
-            diameter: main_dimensions[:diameter],
-            shape: :round,
-            width: main_dimensions[:diameter],
-            height: main_dimensions[:diameter]
-          )
-
-          forward_port = Model::Port.new(
-            point: layout[:forward_socket],
-            vector: forward_vector,
-            diameter: output_dimensions.diameter,
-            shape: :round,
-            width: output_dimensions.diameter,
-            height: output_dimensions.diameter
-          )
-
-          branch_port = Model::Port.new(
-            point: layout[:branch_socket],
-            vector: layout[:branch_axis],
-            diameter: output_dimensions.diameter,
-            shape: :round,
-            width: output_dimensions.diameter,
-            height: output_dimensions.diameter
-          )
-
-          piece = Model::DuctPiece.new(
-            type: :wye,
-            group: group,
-            ports: [forward_port, branch_port, fitting_stem_port]
-          )
-
-          EndFittingSupport.finalize_end_fitting!(
-            network: network,
-            original_stem_port: stem_port,
-            piece: piece,
-            fitting_stem_port: fitting_stem_port,
-            outlet_ports: [forward_port, branch_port]
-          )
-          Catalog::Manager.tag_piece(
-            piece,
-            product,
-            "catalog_rigid" => true,
-            "integral_outlet_diameter" => output_dimensions.diameter
-          )
-
-          {
-            wye_piece: piece,
-            tee_piece: piece,
-            stem_port: fitting_stem_port,
-            forward_port: forward_port,
-            branch_port: branch_port,
-            native_branch_port: branch_port,
-            branch_transition_piece: nil,
-            main_start_port: forward_port,
-            main_end_port: branch_port
-          }
-        end
-      rescue => error
-        puts "EndWyeInsertService.insert_catalog_wye failed: #{error.message}"
-        puts error.backtrace.join("\n")
-        nil
-      end
-      private_class_method :insert_catalog_wye
 
       def self.standard_wye_layout(
         stem_port:,
