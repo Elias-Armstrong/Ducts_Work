@@ -212,7 +212,8 @@ module DuctExtension
         end_cross: :handle_end_cross_click,
         end_wye: :handle_end_wye_click,
         end_reducer: :handle_end_reducer_click,
-        tee: :handle_manual_tee_click
+        tee: :handle_manual_tee_click,
+        wye_saddle: :handle_manual_wye_saddle_click
       }.freeze
 
       END_BRANCH_FITTINGS = {
@@ -491,18 +492,28 @@ module DuctExtension
             choose_round_tee_branch_direction(pipe_piece, point, view)
           end
 
+        requested_branch_dimensions =
+          if Catalog::Manager.active?(Sketchup.active_model)
+            # Catalog inline tee saddles have a fixed native branch connector.
+            # Keep that connector truthful instead of immediately inventing a
+            # transition to whatever size happens to be selected in the tool.
+            nil
+          else
+            {
+              shape: @duct_shape,
+              diameter: @current_diameter,
+              width: @current_width,
+              height: @current_height
+            }
+          end
+
         result = Services::TeeInsertService.insert_tee_on_pipe(
           model: Sketchup.active_model,
           network: @network,
           pipe_piece: pipe_piece,
           tap_point: point,
           branch_direction: branch_direction,
-          branch_dimensions: {
-            shape: @duct_shape,
-            diameter: @current_diameter,
-            width: @current_width,
-            height: @current_height
-          }
+          branch_dimensions: requested_branch_dimensions
         )
 
         unless result
@@ -519,6 +530,65 @@ module DuctExtension
         @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
 
         Sketchup.status_text = "Tee inserted. Click next orthogonal point to draw branch."
+      end
+
+      def handle_manual_wye_saddle_click(view, x, y, point)
+        pipe_piece = Services::SnapService.picked_pipe_piece(
+          network: @network,
+          view: view,
+          x: x,
+          y: y
+        )
+
+        unless pipe_piece
+          ::UI.messagebox("Add Wye Saddle mode: click an existing round duct pipe.")
+          return
+        end
+
+        dimensions = Model::Port.dimensions_from_params({}, pipe_piece.ports[0])
+        unless dimensions[:shape] == :round
+          ::UI.messagebox("Master Flow 45YS4 is a round-pipe saddle. Click an existing round duct pipe.")
+          return
+        end
+
+        side_direction = choose_round_tee_branch_direction(pipe_piece, point, view)
+        lean = ::UI.inputbox(
+          ["45-degree branch lean:"],
+          ["Along pipe direction"],
+          ["Along pipe direction|Against pipe direction"],
+          "Master Flow 45YS4 Wye Saddle"
+        )
+        return unless lean
+        forward_sign = lean[0].to_s == "Against pipe direction" ? -1.0 : 1.0
+
+        result = Services::InlineWyeInsertService.insert_wye_on_pipe(
+          model: Sketchup.active_model,
+          network: @network,
+          pipe_piece: pipe_piece,
+          tap_point: point,
+          side_direction: side_direction,
+          forward_sign: forward_sign,
+          # 45YS4 has a fixed 4-inch branch connector. Start the branch at
+          # that native size; a real catalog reducer can be added afterward.
+          branch_dimensions: nil
+        )
+
+        unless result
+          ::UI.messagebox("Could not insert the catalog wye saddle here. Check main size and distance from the pipe ends.")
+          return
+        end
+
+        @last_port = result[:branch_port]
+        @start_point = nil
+        @orthogonal_axis_lock = nil
+        copy_dimensions_from_port(@last_port)
+        @fitting_mode = :elbow
+        @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
+        Sketchup.status_text = "45-degree wye saddle inserted. Click the next point to continue the branch."
+      rescue => error
+        puts "DuctTool.handle_manual_wye_saddle_click failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        ::UI.messagebox("Could not insert wye saddle. Check the Ruby Console for details.")
       end
 
       def try_auto_tee_target(view, x, y, clicked_point)

@@ -95,23 +95,20 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
-        # A catalog stock section is a real purchasable piece.  If a planned
-        # straight run is longer than that stock length, model it as a chain of
-        # stock pieces instead of labeling one impossible 8-foot object as a
-        # 5-foot CP...X60 product.  The last stock piece is simply cut shorter.
+        # For modeling, keep a catalog straight run as ONE semantic/network
+        # piece regardless of its length. The selected SKU still supplies its
+        # catalog stock length for quantity/takeoff metadata, but the visible run
+        # does not draw artificial stock-section joints. Metadata records
+        # the physical stock quantity so the model does not imply that (for
+        # example) a 130-inch CP6X60 is a single purchasable 130-inch pipe.
         stock_length = catalog_product && catalog_product.stock_length.to_f
-        if catalog_product && stock_length > 0.0 && start_point.distance(end_point) > stock_length + 0.001
-          return execute_catalog_pipe_run(
-            start_point: start_point,
-            end_point: end_point,
-            vector: vector,
-            dimensions: dimensions,
-            catalog_product: catalog_product,
-            source_port: source_port,
-            preferred_width_axis: preferred_width_axis,
-            preferred_height_axis: preferred_height_axis
-          )
-        end
+        total_length = start_point.distance(end_point)
+        stock_piece_count =
+          if catalog_product && stock_length > 0.0
+            [(total_length / stock_length).ceil, 1].max
+          elsif catalog_product
+            1
+          end
 
         build_pipe_piece(
           start_point: start_point,
@@ -121,61 +118,9 @@ module DuctExtension
           source_port: source_port,
           preferred_width_axis: preferred_width_axis,
           preferred_height_axis: preferred_height_axis,
-          stock_piece_index: catalog_product ? 1 : nil,
-          stock_piece_count: catalog_product ? 1 : nil
+          stock_piece_index: nil,
+          stock_piece_count: stock_piece_count
         )
-      end
-
-      def execute_catalog_pipe_run(
-        start_point:,
-        end_point:,
-        vector:,
-        dimensions:,
-        catalog_product:,
-        source_port:,
-        preferred_width_axis:,
-        preferred_height_axis:
-      )
-        stock_length = catalog_product.stock_length.to_f
-        total_length = start_point.distance(end_point)
-        return nil if stock_length <= 0.0 || total_length <= 0.0
-
-        count = (total_length / stock_length).ceil
-        current_start = start_point
-        remaining = total_length
-        last_piece = nil
-
-        count.times do |index|
-          segment_length = [remaining, stock_length].min
-          segment_end =
-            if index == count - 1
-              end_point
-            else
-              current_start.offset(vector, segment_length)
-            end
-
-          last_piece = build_pipe_piece(
-            start_point: current_start,
-            end_point: segment_end,
-            dimensions: dimensions,
-            catalog_product: catalog_product,
-            source_port: index.zero? ? source_port : nil,
-            preferred_width_axis: preferred_width_axis,
-            preferred_height_axis: preferred_height_axis,
-            stock_piece_index: index + 1,
-            stock_piece_count: count
-          )
-          return nil unless last_piece
-
-          current_start = segment_end
-          remaining -= segment_length
-        end
-
-        last_piece
-      rescue => error
-        puts "GeometryExecutor.execute_catalog_pipe_run failed: #{error.message}"
-        puts error.backtrace.join("\n")
-        nil
       end
 
       def build_pipe_piece(
@@ -196,8 +141,10 @@ module DuctExtension
         group = @model.active_entities.add_group
         group.name =
           if catalog_product
-            suffix = stock_piece_count.to_i > 1 ? " (#{stock_piece_index}/#{stock_piece_count})" : ""
-            "Master Flow #{catalog_product.sku} — Duct Pipe#{suffix}"
+            # One modeled run remains one clean selectable object regardless of
+            # the catalog's purchasable stock length. Physical stock quantity is
+            # retained only in metadata, not exposed as fake modeled sections.
+            "Master Flow #{catalog_product.sku} — Duct Pipe"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
           else
@@ -299,7 +246,8 @@ module DuctExtension
             catalog_product,
             "modeled_cut_length" => start_point.distance(end_point),
             "stock_piece_index" => stock_piece_index,
-            "stock_piece_count" => stock_piece_count
+            "stock_piece_count" => stock_piece_count,
+            "catalog_representation" => (stock_piece_count.to_i > 1 ? "continuous_run_assembly" : "single_stock_or_cut_piece")
           )
         end
 
@@ -338,9 +286,20 @@ module DuctExtension
 
         return nil unless start_point && entry_vector && exit_vector
 
+        elbow_angle = entry_vector.angle_between(exit_vector)
+        if catalog_product && !Catalog::Manager.elbow_angle_supported?(catalog_product, dimensions, elbow_angle)
+          Sketchup.status_text = Catalog::Manager.elbow_angle_status(catalog_product, dimensions, elbow_angle)
+          return nil
+        end
+
         bend_radius = step[:bend_radius].to_f
         bend_radius = default_bend_radius(dimensions) if bend_radius <= 0.0
-        bend_radius = Catalog::Manager.elbow_bend_radius(catalog_product, dimensions, bend_radius) if catalog_product
+        bend_radius = Catalog::Manager.elbow_bend_radius(
+          catalog_product,
+          dimensions,
+          bend_radius,
+          angle: elbow_angle
+        ) if catalog_product
 
         source_port = step[:source_port]
         frame_source = source_port || @last_port

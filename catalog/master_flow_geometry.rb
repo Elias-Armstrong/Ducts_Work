@@ -6,13 +6,20 @@ module DuctExtension
     # tee/wye shells, hemmed reducers, and visible stock-pipe seams.
     module MasterFlowGeometry
       EPSILON = 0.000001
-      ROUND_SEGMENTS = 24
+      ROUND_SEGMENTS = Geometry::PipeBuilder::SEGMENTS
       ELBOW_GORE_COUNT = 4
       ELBOW_SUBDIVISIONS_PER_GORE = 3
+      MIN_ADJUSTABLE_ELBOW_ANGLE = 0.5 * Math::PI / 180.0
+      MAX_ADJUSTABLE_ELBOW_ANGLE = Math::PI / 2.0
+      ELBOW_ANGLE_TOLERANCE = 0.75 * Math::PI / 180.0
 
       module_function
 
-      def build_pipe(group:, start_point:, end_point:, dimensions:, product:, preferred_width_axis: nil, preferred_height_axis: nil)
+      def build_pipe(
+        group:, start_point:, end_point:, dimensions:, product:,
+        preferred_width_axis: nil, preferred_height_axis: nil,
+        hide_start_boundary: false, hide_end_boundary: false
+      )
         dims = Model::DuctDimensions.coerce(dimensions)
         success =
           if dims.rectangular?
@@ -47,7 +54,25 @@ module DuctExtension
         if dims.round?
           add_round_pipe_stock_details(group, start_point, end_point, dims.diameter, product)
         else
+          add_rectangular_pipe_stock_details(
+            group,
+            start_point,
+            end_point,
+            dims,
+            product,
+            preferred_width_axis,
+            preferred_height_axis
+          )
           Geometry::Mesh.keep_edges_visible(group)
+        end
+
+        # A semantic split used for an inline saddle is not a real pipe joint.
+        # Hide only the circumference/perimeter at that internal split while
+        # keeping the user's actual run start/end boundaries visible.
+        pipe_axis = normalized(start_point.vector_to(end_point))
+        if pipe_axis
+          hide_cross_section_boundary(group, start_point, pipe_axis) if hide_start_boundary
+          hide_cross_section_boundary(group, end_point, pipe_axis) if hide_end_boundary
         end
 
         true
@@ -137,15 +162,18 @@ module DuctExtension
       end
 
       def elbow_exit_point(start_point:, entry_vector:, exit_vector:, dimensions:, product:)
+        dims = Model::DuctDimensions.coerce(dimensions)
         entry = normalized(entry_vector)
         exitv = normalized(exit_vector)
         return nil unless entry && exitv
-        return nil unless right_angle?(entry, exitv)
 
-        radius = elbow_radius(product, dimensions)
+        angle = entry.angle_between(exitv)
+        return nil unless elbow_angle_supported?(product, dims, angle)
+
+        radius = elbow_radius(product, dims, angle: angle)
         return nil unless radius > EPSILON
 
-        start_point.offset(entry, radius).offset(exitv, radius)
+        circular_arc_exit_point(start_point, entry, exitv, radius, angle)
       rescue
         nil
       end
@@ -155,7 +183,9 @@ module DuctExtension
         entry = normalized(entry_vector)
         exitv = normalized(exit_vector)
         return nil unless group && group.valid? && entry && exitv && product
-        return nil unless right_angle?(entry, exitv)
+
+        angle = entry.angle_between(exitv)
+        return nil unless elbow_angle_supported?(product, dims, angle)
 
         dims.rectangular? ?
           build_rectangular_elbow(
@@ -242,6 +272,316 @@ module DuctExtension
       rescue => error
         puts "MasterFlowGeometry.build_round_tee failed: #{error.message}"
         puts error.backtrace.join("\n") if error.backtrace
+        false
+      end
+
+      # Build only the branch saddle for an inline tee takeoff. The existing
+      # main run is intentionally not replaced by a full-flow tee body.
+      def build_round_tee_saddle(group:, center:, main_vector:, branch_vector:, main_diameter:, product:, branch_depth: nil)
+        main = normalized(main_vector)
+        branch = Geometry::VectorMath.perpendicularized(branch_vector, main)
+        return false unless group && group.valid? && main && branch && product
+        branch.normalize!
+
+        main_radius = main_diameter.to_f / 2.0
+        branch_diameter = (product.branch_diameter || product.diameter).to_f
+        branch_radius = branch_diameter / 2.0
+        return false if main_radius <= EPSILON || branch_radius <= EPSILON
+
+        depth = branch_depth.to_f
+        depth = [branch_diameter * 1.10, 4.0].max if depth <= EPSILON
+        branch_end = center.offset(branch, depth)
+
+        saddle = build_round_saddle_branch(
+          entities: group.entities,
+          junction: center,
+          branch_end: branch_end,
+          main_axis: main,
+          main_radius: main_radius,
+          branch_axis: branch,
+          branch_radius: branch_radius
+        )
+        return false unless saddle
+
+        finish_fabricated_round_fitting!(group)
+        add_branch_attachment_seam(group.entities, center, branch, branch_radius)
+        add_round_bead(group.entities, branch_end.offset(branch.clone.reverse, catalog_bead_offset(branch_diameter)), branch, branch_radius)
+        add_crimp_marks(group.entities, branch_end, branch, branch_radius, branch_diameter)
+        Geometry::Mesh.apply_material_from_group(group)
+        { branch_end: branch_end, branch_axis: branch }
+      rescue => error
+        puts "MasterFlowGeometry.build_round_tee_saddle failed: #{error.message}"
+        nil
+      end
+
+      # 45YS4 is a side takeoff, not an in-line Y body. Keep the main round run
+      # visually continuous and fish-mouth the 4-inch branch to the existing run.
+      def build_round_wye_saddle(group:, center:, main_vector:, side_vector:, main_diameter:, product:, forward_sign: 1.0, branch_depth: nil)
+        main = normalized(main_vector)
+        side = Geometry::VectorMath.perpendicularized(side_vector, main)
+        return false unless group && group.valid? && main && side && product
+        side.normalize!
+
+        angle = (product.angle_degrees || 45.0).to_f * Math::PI / 180.0
+        forward = scaled_vector(main, forward_sign.to_f < 0.0 ? -Math.cos(angle) : Math.cos(angle))
+        lateral = scaled_vector(side, Math.sin(angle))
+        branch = normalized(vector_sum(forward, lateral))
+        return false unless branch
+
+        main_radius = main_diameter.to_f / 2.0
+        branch_diameter = (product.branch_diameter || product.diameter).to_f
+        branch_radius = branch_diameter / 2.0
+        return false if main_radius + EPSILON < branch_radius
+
+        depth = branch_depth.to_f
+        depth = [branch_diameter * 1.85, 6.0].max if depth <= EPSILON
+        branch_end = center.offset(branch, depth)
+
+        saddle = build_round_saddle_branch(
+          entities: group.entities,
+          junction: center,
+          branch_end: branch_end,
+          main_axis: main,
+          main_radius: main_radius,
+          branch_axis: branch,
+          branch_radius: branch_radius
+        )
+        return false unless saddle
+
+        finish_fabricated_round_fitting!(group)
+        add_branch_attachment_seam(group.entities, center, branch, branch_radius)
+        add_round_bead(group.entities, branch_end.offset(branch.clone.reverse, catalog_bead_offset(branch_diameter)), branch, branch_radius)
+        add_crimp_marks(group.entities, branch_end, branch, branch_radius, branch_diameter)
+        Geometry::Mesh.apply_material_from_group(group)
+        { branch_end: branch_end, branch_axis: branch }
+      rescue => error
+        puts "MasterFlowGeometry.build_round_wye_saddle failed: #{error.message}"
+        nil
+      end
+
+      # Product-specific terminal boot/register-box geometry. This models the
+      # sheet-metal transition to the register opening; it does not claim that a
+      # decorative grille is included with the Master Flow box SKU.
+      def build_register_box(group:, center:, axis:, product:, preferred_width_axis: nil, preferred_height_axis: nil)
+        direction = normalized(axis)
+        return false unless group && group.valid? && direction && product
+        diameter = product.diameter.to_f
+        width = product.width.to_f
+        height = product.height.to_f
+        return false if diameter <= EPSILON || width <= EPSILON || height <= EPSILON
+
+        depth = product.transition_length.to_f
+        depth = [diameter, 4.0].max if depth <= EPSILON
+        outer = center.offset(direction, depth)
+        start_dims = { shape: :round, diameter: diameter }
+        end_dims = { shape: :rectangular, width: width, height: height }
+
+        success = Geometry::MixedTransitionBuilder.build_into(
+          group,
+          center,
+          outer,
+          start_dimensions: start_dims,
+          end_dimensions: end_dims,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis
+        )
+        return false unless success
+
+        if [:flanged_register_box, :ceiling_register_box].include?(product.style)
+          basis = Geometry::RectangularFrame.basis_for_axis(
+            direction,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis
+          )
+          if basis
+            flange = Geometry::RectangularFrame.rectangle_corners_from_basis(
+              outer,
+              basis[:width_axis],
+              basis[:height_axis],
+              width + 1.0,
+              height + 1.0
+            )
+            reveal_polyline_ring(group.entities, flange) if flange && flange.length == 4
+          end
+        end
+
+        Geometry::Mesh.apply_material_from_group(group)
+        true
+      rescue => error
+        puts "MasterFlowGeometry.build_register_box failed: #{error.message}"
+        false
+      end
+
+      def build_register_box_saddle(group:, center:, outward_axis:, duct_axis:, duct_diameter:, product:)
+        return false unless group && group.valid? && product
+        width = product.width.to_f
+        height = product.height.to_f
+        return false if width <= EPSILON || height <= EPSILON
+
+        Geometry::VentBuilder.build_side_register_into(
+          group,
+          center: center,
+          outward_axis: outward_axis,
+          duct_axis: duct_axis,
+          plate_width: width,
+          plate_height: height,
+          opening_width: width * 0.82,
+          opening_height: height * 0.62,
+          bumped_out: true,
+          duct_diameter: duct_diameter
+        )
+      rescue => error
+        puts "MasterFlowGeometry.build_register_box_saddle failed: #{error.message}"
+        false
+      end
+
+      # Exterior appliance wall vent. Connector size is catalog-authoritative;
+      # the exterior hood envelope is a conservative visual approximation because
+      # RESMF164/GAF does not publish a complete dimensional envelope for every
+      # WVA variant in the same table as the connector sizes.
+      def build_wall_vent(group:, center:, axis:, product:, preferred_width_axis: nil, preferred_height_axis: nil)
+        direction = normalized(axis)
+        return false unless group && group.valid? && center && direction && product
+
+        hood = group.entities.add_group
+        hood.material = group.material if group.respond_to?(:material) && group.material
+
+        if product.shape.to_sym == :round
+          diameter = product.diameter.to_f
+          return false if diameter <= EPSILON
+
+          throat = [diameter * 0.45, 1.5].max
+          throat_end = center.offset(direction, throat)
+          ok = Geometry::PipeBuilder.build_into(
+            group,
+            center,
+            throat_end,
+            diameter,
+            overlap_start: false,
+            overlap_end: false,
+            cap_start: false,
+            cap_end: false
+          )
+          return false unless ok
+
+          basis = Geometry::RectangularFrame.basis_for_axis(
+            direction,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis
+          )
+          return false unless basis
+
+          hood_size = [diameter * 1.55, diameter + 2.0].max
+          ok = Geometry::VentBuilder.build_rectangular_end_cover_into(
+            hood,
+            center: throat_end,
+            axis: direction,
+            width: hood_size,
+            height: hood_size,
+            width_axis: basis[:width_axis],
+            height_axis: basis[:height_axis],
+            cover_width: hood_size,
+            cover_height: hood_size
+          )
+          return false unless ok
+        else
+          width = product.width.to_f
+          height = product.height.to_f
+          return false if width <= EPSILON || height <= EPSILON
+
+          basis = Geometry::RectangularFrame.stable_basis_for_axis(
+            direction,
+            width,
+            height,
+            preferred_width_axis: preferred_width_axis,
+            preferred_height_axis: preferred_height_axis,
+            allow_relevel: false
+          )
+          return false unless basis
+
+          throat = [height * 0.65, 1.5].max
+          throat_end = center.offset(direction, throat)
+          ok = Geometry::RectangularPipeBuilder.build_into(
+            group,
+            center,
+            throat_end,
+            width,
+            height,
+            overlap_start: false,
+            overlap_end: false,
+            cap_start: false,
+            cap_end: false,
+            preferred_width_axis: basis[:width_axis],
+            preferred_height_axis: basis[:height_axis],
+            allow_relevel: false
+          )
+          return false unless ok
+
+          ok = Geometry::VentBuilder.build_rectangular_end_cover_into(
+            hood,
+            center: throat_end,
+            axis: direction,
+            width: width,
+            height: height,
+            width_axis: basis[:width_axis],
+            height_axis: basis[:height_axis],
+            cover_width: width + 2.0,
+            cover_height: height + 2.0
+          )
+          return false unless ok
+        end
+
+        Geometry::Mesh.apply_material_from_group(group)
+        true
+      rescue => error
+        puts "MasterFlowGeometry.build_wall_vent failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        false
+      end
+
+      # Screened fresh-air intake terminal. The catalog-authoritative part is
+      # the nominal round connector; the hood uses the same conservative shell
+      # as the wall-vent preview plus a visible screen grid for recognition.
+      def build_fresh_air_vent(group:, center:, axis:, product:, preferred_width_axis: nil, preferred_height_axis: nil)
+        return false unless product && product.shape.to_sym == :round
+        ok = build_wall_vent(
+          group: group,
+          center: center,
+          axis: axis,
+          product: product,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis
+        )
+        return false unless ok
+
+        direction = normalized(axis)
+        return false unless direction
+        basis = Geometry::RectangularFrame.basis_for_axis(
+          direction,
+          preferred_width_axis: preferred_width_axis,
+          preferred_height_axis: preferred_height_axis
+        )
+        return true unless basis
+
+        diameter = product.diameter.to_f
+        throat = [diameter * 0.45, 1.5].max
+        face_center = center.offset(direction, throat + 0.03)
+        half = [diameter * 1.35, diameter + 1.4].max / 2.0
+        a = basis[:width_axis]
+        b = basis[:height_axis]
+
+        [-0.5, 0.0, 0.5].each do |fraction|
+          p1 = face_center.offset(a, -half).offset(b, half * fraction)
+          p2 = face_center.offset(a, half).offset(b, half * fraction)
+          visible_line(group.entities, p1, p2)
+          p3 = face_center.offset(b, -half).offset(a, half * fraction)
+          p4 = face_center.offset(b, half).offset(a, half * fraction)
+          visible_line(group.entities, p3, p4)
+        end
+
+        true
+      rescue => error
+        puts "MasterFlowGeometry.build_fresh_air_vent failed: #{error.message}"
         false
       end
 
@@ -568,7 +908,15 @@ module DuctExtension
       # Internal geometry helpers
 
       def build_round_adjustable_elbow(group:, start_point:, entry:, exitv:, dimensions:, product:)
-        radius = elbow_radius(product, dimensions)
+        angle = entry.angle_between(exitv)
+        return nil unless elbow_angle_supported?(product, dimensions, angle)
+
+        # Treat the 90-degree catalog envelope as the reference configuration.
+        # For a smaller setting, preserve the fitting's developed centerline
+        # length and reduce the deflection at each swivel/gore boundary.  This
+        # avoids unrealistically shrinking the physical elbow toward zero length
+        # as the requested turn approaches straight.
+        radius = elbow_radius(product, dimensions, angle: angle)
         normal = entry.cross(exitv)
         return nil if normal.length <= EPSILON
         normal.normalize!
@@ -577,20 +925,43 @@ module DuctExtension
         center_offset.normalize!
         center = start_point.offset(center_offset, radius)
         total_steps = ELBOW_GORE_COUNT * ELBOW_SUBDIVISIONS_PER_GORE
-        angle = Math::PI / 2.0
         rings = []
 
-        start_axis_a = normal.clone
-        start_axis_b = entry.cross(start_axis_a)
-        return nil if start_axis_b.length <= EPSILON
-        start_axis_b.normalize!
+        # Match the same deterministic circular basis used by PipeBuilder.
+        # Using a different facet phase made the catalog elbow silhouette look
+        # fractionally smaller/larger where it met an otherwise identical pipe.
+        start_axis_a, start_axis_b = round_basis(entry)
+        desired_exit_axis_a, = round_basis(exitv)
+        return nil unless start_axis_a && start_axis_b && desired_exit_axis_a
+
+        # PipeBuilder chooses a deterministic polygon phase independently for
+        # every straight direction. A pure rigid rotation of the entry ring can
+        # end a few degrees out of phase with the next straight pipe even though
+        # both have the same true diameter. That makes the faceted silhouettes
+        # read as fractionally different sizes. Compute that end-phase error and
+        # distribute a harmless circular-section twist through the elbow so BOTH
+        # sockets land on exactly the same 32-gon as their adjoining pipes.
+        end_rotation = Geom::Transformation.rotation(center, normal, angle)
+        raw_exit_axis_a = start_axis_a.transform(end_rotation)
+        raw_exit_axis_a.normalize!
+        phase_error = signed_angle_about_axis(raw_exit_axis_a, desired_exit_axis_a, exitv)
 
         (total_steps + 1).times do |index|
-          theta = angle * index.to_f / total_steps.to_f
+          fraction = index.to_f / total_steps.to_f
+          theta = angle * fraction
           rotation = Geom::Transformation.rotation(center, normal, theta)
           ring_center = start_point.transform(rotation)
+          tangent = entry.transform(rotation)
+          tangent.normalize!
           axis_a = start_axis_a.transform(rotation)
           axis_b = start_axis_b.transform(rotation)
+
+          if phase_error.abs > 0.0000001
+            phase_rotation = Geom::Transformation.rotation(Geom::Point3d.new(0, 0, 0), tangent, phase_error * fraction)
+            axis_a = axis_a.transform(phase_rotation)
+            axis_b = axis_b.transform(phase_rotation)
+          end
+
           axis_a.normalize!
           axis_b.normalize!
           rings << round_ring_points(ring_center, axis_a, axis_b, dimensions.diameter / 2.0)
@@ -601,8 +972,9 @@ module DuctExtension
           connect_round_rings(entities, rings[ring_index], rings[ring_index + 1])
         end
 
-        # Hide the dense mesh, then reveal the four characteristic adjustable
-        # elbow gore/swivel boundaries plus both connection rings.
+        # Hide the dense mesh, then reveal only the internal adjustable-elbow
+        # gore/swivel boundaries. The two connection rings are intentionally
+        # left hidden so a same-diameter straight pipe meets the elbow smoothly.
         entities.grep(Sketchup::Edge).each do |edge|
           next unless edge.valid?
           edge.hidden = true
@@ -610,11 +982,12 @@ module DuctExtension
           edge.smooth = true if edge.respond_to?(:smooth=)
         end
 
-        boundary_indexes = (0..ELBOW_GORE_COUNT).map { |i| i * ELBOW_SUBDIVISIONS_PER_GORE }
+        boundary_indexes = (1...ELBOW_GORE_COUNT).map { |i| i * ELBOW_SUBDIVISIONS_PER_GORE }
         boundary_indexes.each { |idx| reveal_ring(entities, rings[idx]) }
         Geometry::Mesh.apply_material_from_group(group)
 
-        end_point = start_point.offset(entry, radius).offset(exitv, radius)
+        end_point = circular_arc_exit_point(start_point, entry, exitv, radius, angle)
+        return nil unless end_point
         {
           end_point: end_point,
           start_basis: nil,
@@ -734,6 +1107,31 @@ module DuctExtension
       end
       private_class_method :build_round_frustum
 
+      def hide_cross_section_boundary(group, center, axis)
+        direction = normalized(axis)
+        return unless group && group.valid? && center && direction
+
+        tolerance = 0.001
+        group.entities.grep(Sketchup::Edge).each do |edge|
+          next unless edge.valid?
+          vertices = edge.vertices
+          next unless vertices && vertices.length == 2
+
+          in_plane = vertices.all? do |vertex|
+            offset = center.vector_to(vertex.position)
+            offset.dot(direction).abs <= tolerance
+          end
+          next unless in_plane
+
+          edge.hidden = true
+          edge.soft = true if edge.respond_to?(:soft=)
+          edge.smooth = true if edge.respond_to?(:smooth=)
+        end
+      rescue => error
+        puts "MasterFlowGeometry.hide_cross_section_boundary failed: #{error.message}"
+      end
+      private_class_method :hide_cross_section_boundary
+
       def add_round_pipe_stock_details(group, start_point, end_point, diameter, product)
         direction = normalized(start_point.vector_to(end_point))
         return unless direction
@@ -741,30 +1139,39 @@ module DuctExtension
         return unless axis_a && axis_b
         radius = diameter.to_f / 2.0
         length = start_point.distance(end_point)
+        return if length <= EPSILON
 
-        # Longitudinal snap-lock seam.
+        # Modeling policy: one requested run is one continuous sheet-metal run.
+        # Do not draw virtual 2/3/5-ft stock joints.  Keep only product-specific
+        # construction texture that actually helps identify the pipe family.
         seam_start = start_point.offset(axis_a, radius)
         seam_end = end_point.offset(axis_a, radius)
         visible_line(group.entities, seam_start, seam_end)
 
-        # Beaded products receive two shallow bead rings near the ends. Standard
-        # snap-lock pipe gets a single stop-bead near the crimped end.
-        offsets =
-          if product && product.style == :beaded
-            [0.55, [length - 0.55, 0.55].max]
-          else
-            [[length - 0.45, length * 0.82].min]
+        if product && product.style == :beaded
+          # Beads are reinforcement texture, not stock-piece boundaries. Repeat
+          # them on a stable pitch across the continuous modeled run.
+          bead_pitch = 20.0
+          offset = bead_pitch
+          while offset < length - 0.35
+            center = start_point.offset(direction, offset)
+            reveal_ring(group.entities, round_ring_points(center, axis_a, axis_b, radius * 1.012))
+            offset += bead_pitch
           end
-        offsets.each do |offset|
-          next unless offset > 0.05 && offset < length - 0.05
-          center = start_point.offset(direction, offset)
-          ring = round_ring_points(center, axis_a, axis_b, radius * 1.012)
-          reveal_ring(group.entities, ring)
         end
       rescue => error
         puts "MasterFlowGeometry.add_round_pipe_stock_details failed: #{error.message}"
       end
       private_class_method :add_round_pipe_stock_details
+
+      def add_rectangular_pipe_stock_details(group, start_point, end_point, dimensions, product, preferred_width_axis, preferred_height_axis)
+        # Deliberately no virtual stock-section rings. Rectangular runs remain one
+        # visually continuous run from the user's chosen start to chosen end.
+        true
+      rescue => error
+        puts "MasterFlowGeometry.add_rectangular_pipe_stock_details failed: #{error.message}"
+      end
+      private_class_method :add_rectangular_pipe_stock_details
 
       def add_stack_boot_details(group:, start_point:, end_point:, start_dimensions:, end_dimensions:, preferred_width_axis:, preferred_height_axis:)
         vector = normalized(start_point.vector_to(end_point))
@@ -893,13 +1300,37 @@ module DuctExtension
       end
       private_class_method :radius_on_linear_taper
 
-      def elbow_radius(product, dimensions)
+      def elbow_angle_supported?(product, dimensions, angle)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        value = angle.to_f
+        return false if value <= EPSILON
+
+        if dims.round? && product && product.style == :four_gore_adjustable
+          return false if value < MIN_ADJUSTABLE_ELBOW_ANGLE
+          return value <= MAX_ADJUSTABLE_ELBOW_ANGLE + ELBOW_ANGLE_TOLERANCE
+        end
+
+        # Loaded rectangular stack elbows are fixed 90-degree products.
+        (value - Math::PI / 2.0).abs <= ELBOW_ANGLE_TOLERANCE
+      rescue
+        false
+      end
+
+      def elbow_radius(product, dimensions, angle: nil)
         dims = Model::DuctDimensions.coerce(dimensions)
         overall = product && product.overall || {}
         if dims.round?
-          radius = overall[:derived_centerline_radius].to_f
-          return radius if radius > EPSILON
-          return dims.diameter * 1.15
+          reference_radius = overall[:derived_centerline_radius].to_f
+          reference_radius = dims.diameter * 1.15 unless reference_radius > EPSILON
+
+          if product && product.style == :four_gore_adjustable && angle.to_f > EPSILON
+            # Preserve the developed centerline length of the 90-degree reference
+            # configuration while opening/closing the adjustable elbow.
+            developed_length = reference_radius * Math::PI / 2.0
+            return developed_length / angle.to_f
+          end
+
+          return reference_radius
         end
 
         if product && product.style == :long_way_miter
@@ -913,6 +1344,38 @@ module DuctExtension
       rescue
         Model::DuctDimensions.coerce(dimensions).largest * 0.75
       end
+
+      def circular_arc_exit_point(start_point, entry, exitv, radius, angle = nil)
+        theta = angle || entry.angle_between(exitv)
+        normal = entry.cross(exitv)
+        return nil if normal.length <= EPSILON
+        normal.normalize!
+
+        center_offset = normal.cross(entry)
+        return nil if center_offset.length <= EPSILON
+        center_offset.normalize!
+
+        center = start_point.offset(center_offset, radius.to_f)
+        rotation = Geom::Transformation.rotation(center, normal, theta)
+        start_point.transform(rotation)
+      rescue
+        nil
+      end
+      private_class_method :circular_arc_exit_point
+
+      def signed_angle_about_axis(from_vector, to_vector, axis)
+        from = normalized(from_vector)
+        to = normalized(to_vector)
+        normal = normalized(axis)
+        return 0.0 unless from && to && normal
+
+        angle = from.angle_between(to)
+        cross = from.cross(to)
+        normal.dot(cross) < 0.0 ? -angle : angle
+      rescue
+        0.0
+      end
+      private_class_method :signed_angle_about_axis
 
       def right_angle?(a, b)
         (a.dot(b)).abs <= 0.02

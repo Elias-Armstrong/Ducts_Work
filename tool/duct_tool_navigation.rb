@@ -381,6 +381,8 @@ module DuctExtension
             "Straight Only"
           when :tee
             "Add Tee"
+          when :wye_saddle
+            "Add Wye Saddle"
           when :end_tee
             "End Tee"
           when :end_cross

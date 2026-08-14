@@ -101,17 +101,24 @@ module DuctExtension
           Geometry::VectorMath.closest_points_between_lines(**args)
         end
 
-        def self.bend_radius_for(dimensions)
+        def self.bend_radius_for(dimensions, angle: nil)
           fallback = Model::DuctDimensions.coerce(dimensions).largest * DEFAULT_BEND_RADIUS_FACTOR
           if Catalog::Manager.active?(Sketchup.active_model)
             product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
-            return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback) if product
+            return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback, angle: angle) if product
           end
           fallback
         end
 
-        def self.valid_elbow_angle?(angle)
-          angle > 0.01 && angle < Math::PI - 0.01
+        def self.valid_elbow_angle?(angle, dimensions = nil)
+          return false unless angle > 0.01 && angle < Math::PI - 0.01
+          return true unless dimensions && Catalog::Manager.active?(Sketchup.active_model)
+
+          product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+          return false unless product
+          Catalog::Manager.elbow_angle_supported?(product, dimensions, angle)
+        rescue
+          false
         end
 
         def self.elbow_exit_point(start_point, entry_vector, exit_vector, bend_radius)

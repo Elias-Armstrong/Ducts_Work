@@ -310,26 +310,36 @@ module DuctExtension
         !active?(model)
       end
 
-      def elbow_bend_radius(product, dimensions, fallback)
-        return fallback.to_f unless product && product.overall
-        dims = Model::DuctDimensions.coerce(dimensions)
-
-        if dims.round?
-          value = product.overall[:derived_centerline_radius]
-          return value.to_f if value && value.to_f > 0.0
-        elsif dims.rectangular?
-          # The published envelope constrains a simple procedural approximation.
-          # Short-way and long-way variants therefore produce visibly different
-          # bend radii while keeping the existing rectangular elbow implementation.
-          h = product.overall[:height].to_f
-          smallest = [dims.width, dims.height].min
-          value = h - smallest / 2.0
+      def elbow_bend_radius(product, dimensions, fallback, angle: nil)
+        return fallback.to_f unless product
+        if defined?(MasterFlowGeometry) && MasterFlowGeometry.respond_to?(:elbow_radius)
+          value = MasterFlowGeometry.elbow_radius(product, dimensions, angle: angle).to_f
           return value if value > 0.0
         end
-
         fallback.to_f
       rescue
         fallback.to_f
+      end
+
+      def elbow_angle_supported?(product, dimensions, angle)
+        return true unless active?(Sketchup.active_model)
+        return false unless product
+        return MasterFlowGeometry.elbow_angle_supported?(product, dimensions, angle) if defined?(MasterFlowGeometry)
+        false
+      rescue
+        false
+      end
+
+      def elbow_angle_status(product, dimensions, angle)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        degrees = angle.to_f * 180.0 / Math::PI
+        if dims.round? && product && product.style == :four_gore_adjustable
+          "Master Flow #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
+        else
+          "Master Flow #{product && product.sku}: this catalog elbow is a fixed 90° fitting. Requested #{degrees.round(1)}°."
+        end
+      rescue
+        "Requested catalog elbow angle is not supported."
       end
 
       def transition_length(product, fallback)
@@ -1187,7 +1197,7 @@ module DuctExtension
           .legend{font-size:12px;margin:8px 0}.green,.red{display:inline-block;width:12px;height:12px;border:1px solid #aaa;vertical-align:middle;margin-right:4px}.green{background:#e8f7e8}.red{background:#fff0f0}
           </style></head><body>
           <h1>Master Flow — Simple Duct catalog</h1>
-          <div class="note">Only product families Simple Duct currently models are shown. A missing fitting is treated as genuinely unavailable in strict catalog mode; the extension does not substitute generic geometry. SKU/model numbers, nominal connector sizes, and stock lengths are the catalog-authoritative values. Physical-envelope values are shown separately only where a measurement is loaded, so nominal size is never confused with body geometry.</div>
+          <div class="note">Only product families Simple Duct currently models are shown. A missing fitting is treated as genuinely unavailable in strict catalog mode; the extension does not substitute generic geometry. SKU/model numbers, nominal connector sizes, and stock lengths are the catalog-authoritative values. Physical-envelope values are shown separately only where a measurement is loaded, so nominal size is never confused with body geometry. Round adjustable elbows may be modeled at installed angles through 90°. Long straight runs stay one semantic/modeling piece while repeating the selected stock product's visual section pattern; stock-quantity metadata is retained for takeoff.</div>
           #{current_html}
           <div class="warning"><b>Important:</b> Master Flow sells several rectangular straight-duct sizes without a matching elbow in RESMF164. Those rows are intentionally marked <b>STRAIGHT ONLY</b>.</div>
           <h2>Buildability by duct size</h2>
@@ -1251,16 +1261,406 @@ module DuctExtension
       end
       private_class_method :product_envelope_text
 
-      # Use the catalog-specific rigid elbow envelope when available.
-      def elbow_bend_radius(product, dimensions, fallback)
+      # Use the catalog-specific elbow geometry when available. For adjustable
+      # round elbows the 90° envelope is the reference, and the effective radius
+      # increases at smaller angles so the fitting keeps its developed length.
+      def elbow_bend_radius(product, dimensions, fallback, angle: nil)
         return fallback.to_f unless product
         if defined?(MasterFlowGeometry) && MasterFlowGeometry.respond_to?(:elbow_radius)
-          value = MasterFlowGeometry.elbow_radius(product, dimensions).to_f
+          value = MasterFlowGeometry.elbow_radius(product, dimensions, angle: angle).to_f
           return value if value > 0.0
         end
         fallback.to_f
       rescue
         fallback.to_f
+      end
+
+      def elbow_angle_supported?(product, dimensions, angle)
+        return true unless active?(Sketchup.active_model)
+        return false unless product
+        return MasterFlowGeometry.elbow_angle_supported?(product, dimensions, angle) if defined?(MasterFlowGeometry)
+        false
+      rescue
+        false
+      end
+
+      def elbow_angle_status(product, dimensions, angle)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        degrees = angle.to_f * 180.0 / Math::PI
+        if dims.round? && product && product.style == :four_gore_adjustable
+          "Master Flow #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
+        else
+          "Master Flow #{product && product.sku}: this catalog elbow is a fixed 90° fitting. Requested #{degrees.round(1)}°."
+        end
+      rescue
+        "Requested catalog elbow angle is not supported."
+      end
+    end
+  end
+end
+
+# ===== v5.1 catalog saddle / register-box extensions =====
+module DuctExtension
+  module Catalog
+    module Manager
+      module_function
+
+      def tee_saddle_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+        all_products(model).select do |product|
+          product.family == :tee_saddle && close?(product.diameter, dims.diameter)
+        end
+      rescue
+        []
+      end
+
+      def tee_saddle_product(dimensions, model = nil)
+        tee_saddle_products(dimensions, model).first
+      rescue
+        nil
+      end
+
+      def wye_saddle_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+        all_products(model).select do |product|
+          product.family == :wye_saddle && dims.diameter.to_f + 0.001 >= product.diameter.to_f
+        end
+      rescue
+        []
+      end
+
+      def wye_saddle_product(dimensions, model = nil)
+        wye_saddle_products(dimensions, model).first
+      rescue
+        nil
+      end
+
+      def register_box_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+        all_products(model).select do |product|
+          product.family == :register_box && close?(product.diameter, dims.diameter)
+        end
+      rescue
+        []
+      end
+
+      def register_box_saddle_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+        all_products(model).select do |product|
+          product.family == :register_box_saddle && close?(product.diameter, dims.diameter)
+        end
+      rescue
+        []
+      end
+
+      def wall_vent_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        all_products(model).select do |product|
+          next false unless product.family == :wall_vent
+          if dims.round?
+            product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+          else
+            product.shape.to_sym == :rectangular && rectangular_size_match?(
+              product.width, product.height, dims.width, dims.height
+            )
+          end
+        end
+      rescue
+        []
+      end
+
+      def fresh_air_vent_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+        all_products(model).select do |product|
+          product.family == :fresh_air_vent && close?(product.diameter, dims.diameter)
+        end
+      rescue
+        []
+      end
+
+      def prompt_product_from(products, title:, label: "Product:")
+        products = Array(products)
+        return nil if products.empty?
+        return products.first if products.length == 1
+        input = ::UI.inputbox(
+          [label],
+          [products.first.label],
+          [products.map(&:label).join("|")],
+          title
+        )
+        return nil unless input
+        products.find { |product| product.label == input[0].to_s } || products.first
+      rescue => error
+        puts "Catalog::Manager.prompt_product_from failed: #{error.message}"
+        nil
+      end
+
+      def prompt_terminal_product(dimensions, model = nil)
+        products =
+          end_cover_products(dimensions, model) +
+          register_box_products(dimensions, model) +
+          wall_vent_products(dimensions, model) +
+          fresh_air_vent_products(dimensions, model)
+        prompt_product_from(products, title: "Master Flow End Component", label: "End Product:")
+      end
+
+      def prompt_register_box_saddle(dimensions, model = nil)
+        prompt_product_from(
+          register_box_saddle_products(dimensions, model),
+          title: "Master Flow Side Register",
+          label: "Register Saddle:"
+        )
+      end
+
+      def compatible_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+
+        all_products(model).select do |product|
+          case product.family
+          when :pipe, :elbow, :tee, :wye
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          when :tee_saddle
+            dims.round? && close?(product.diameter, dims.diameter)
+          when :wye_saddle
+            dims.round? && dims.diameter.to_f + 0.001 >= product.diameter.to_f
+          when :register_box, :register_box_saddle
+            dims.round? && close?(product.diameter, dims.diameter)
+          when :wall_vent
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          when :fresh_air_vent
+            dims.round? && product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+          when :transition
+            if product.shape.to_sym == :round && dims.round?
+              close?(product.diameter, dims.diameter) || close?(product.branch_diameter, dims.diameter)
+            elsif product.shape.to_sym == :mixed
+              (dims.round? && close?(product.diameter, dims.diameter)) ||
+                (dims.rectangular? && rectangular_size_match?(product.width, product.height, dims.width, dims.height))
+            else
+              false
+            end
+          when :end_cover
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          else
+            false
+          end
+        end
+      rescue
+        []
+      end
+
+      def catalog_size_rows(model = nil)
+        rows = {}
+        [:round, :rectangular].each do |shape|
+          pipe_products(shape, model).each do |product|
+            dims = dimensions_for_pipe_product(product)
+            key = dimensions_signature(dims)
+            rows[key] ||= { dimensions: dims, pipes: [] }
+            rows[key][:pipes] << product
+          end
+        end
+
+        rows.values.each do |row|
+          dims = row[:dimensions]
+          row[:elbows] = elbow_products(dims, model)
+          row[:tees] = junction_products(dims, :tee, model)
+          row[:wyes] = junction_products(dims, :wye, model)
+          row[:tee_saddles] = tee_saddle_products(dims, model)
+          row[:wye_saddles] = wye_saddle_products(dims, model)
+          row[:transitions] = compatible_products(dims, model).select { |p| p.family == :transition }
+          row[:register_boxes] = register_box_products(dims, model)
+          row[:register_saddles] = register_box_saddle_products(dims, model)
+          row[:wall_vents] = wall_vent_products(dims, model)
+          row[:fresh_air_vents] = fresh_air_vent_products(dims, model)
+          row[:covers] = end_cover_products(dims, model)
+        end
+
+        rows.values.sort_by do |row|
+          dims = row[:dimensions]
+          dims.round? ? [0, dims.diameter.to_f, 0] : [1, -dims.width.to_f, -dims.height.to_f]
+        end
+      rescue
+        []
+      end
+
+      def size_availability_text(dimensions, model = nil)
+        model ||= Sketchup.active_model if defined?(Sketchup)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        products = compatible_products(dims, model)
+        groups = products.group_by(&:family)
+        labels = {
+          pipe: "Straight duct",
+          elbow: "Elbows",
+          tee: "Full-flow tees",
+          tee_saddle: "Inline tee saddles",
+          wye: "Full-flow wyes",
+          wye_saddle: "Inline wye saddles",
+          transition: "Reducers / converters",
+          register_box: "End register boxes",
+          register_box_saddle: "Side register saddles",
+          wall_vent: "Exterior wall vents",
+          fresh_air_vent: "Fresh-air intake vents",
+          end_cover: "End covers"
+        }
+        lines = ["Master Flow options for #{dimensions_label(dims)}:"]
+        labels.each do |family, label|
+          matches = Array(groups[family])
+          lines << "  #{label}: #{matches.empty? ? 'none' : matches.map(&:sku).join(', ')}"
+        end
+        lines.join("\n")
+      rescue
+        "No availability summary could be generated."
+      end
+
+      def catalog_browser_html(model, dimensions: nil)
+        current = dimensions && Model::DuctDimensions.coerce(dimensions)
+        groups = products_grouped_by_family(model)
+        family_names = {
+          pipe: "Straight Duct",
+          elbow: "Elbows",
+          tee: "Full-Flow Tees",
+          tee_saddle: "Inline Tee Saddles",
+          wye: "Full-Flow Wyes",
+          wye_saddle: "Inline Wye Saddles",
+          transition: "Reducers / Stack Boots",
+          register_box: "Register Boxes / Grille Transitions",
+          register_box_saddle: "Register Box Saddles",
+          wall_vent: "Exterior Appliance Wall Vents",
+          fresh_air_vent: "Fresh Air Intake Vents",
+          end_cover: "End Covers"
+        }
+
+        availability_rows = catalog_size_rows(model).map do |row|
+          dims = row[:dimensions]
+          is_current = current && dimensions_signature(current) == dimensions_signature(dims)
+          has_elbow = !Array(row[:elbows]).empty?
+          css = [is_current ? "current-row" : nil, has_elbow ? nil : "straight-only"].compact.join(" ")
+          branch = (Array(row[:tees]) + Array(row[:tee_saddles]) + Array(row[:wyes]) + Array(row[:wye_saddles])).map(&:sku)
+          vents = (
+            Array(row[:register_boxes]) + Array(row[:register_saddles]) +
+            Array(row[:wall_vents]) + Array(row[:fresh_air_vents]) + Array(row[:covers])
+          ).map(&:sku)
+          <<~ROW
+            <tr class="#{css}">
+              <td><b>#{html_escape(dimensions_label(dims))}</b></td>
+              <td>#{html_escape(Array(row[:pipes]).map(&:sku).join(', '))}</td>
+              <td>#{html_escape(Array(row[:elbows]).map(&:sku).join(', ').yield_self { |x| x.empty? ? 'NONE' : x })}</td>
+              <td>#{html_escape(branch.join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td>#{html_escape(Array(row[:transitions]).map(&:sku).join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td>#{html_escape(vents.join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td><b>#{has_elbow ? 'TURNABLE' : 'STRAIGHT ONLY'}</b></td>
+            </tr>
+          ROW
+        end.join
+
+        details = family_names.map do |family, heading|
+          products = Array(groups[family]).sort_by { |p| [p.shape.to_s, p.diameter.to_f, p.width.to_f, p.sku.to_s] }
+          next "" if products.empty?
+          body = products.map do |product|
+            compatible = current ? compatible_products(current, model).include?(product) : false
+            klass = compatible ? "compatible" : ""
+            "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td><td>#{html_escape(product_envelope_text(product))}</td></tr>"
+          end.join
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / stock size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
+        end.join
+
+        current_html = if current
+          "<div class='current'><b>Current duct:</b> #{html_escape(dimensions_label(current))}. Matching products are highlighted.</div>"
+        else
+          "<div class='current'>Buildability now includes full-flow end junctions, inline saddle takeoffs, register/grille transitions, exterior wall vents, and end covers.</div>"
+        end
+
+        <<~HTML
+          <!doctype html><html><head><meta charset="utf-8"><style>
+          body{font-family:Arial,sans-serif;margin:18px;color:#222;background:#fafafa}
+          h1{margin:0 0 8px;font-size:24px} h2{font-size:18px;margin-top:28px;border-bottom:1px solid #bbb;padding-bottom:5px}
+          .current{background:#eef5ff;border:1px solid #9bbce6;padding:10px 12px;border-radius:6px;margin:14px 0}
+          .note{font-size:13px;color:#555;margin-bottom:14px}.warning{background:#fff2d9;border:1px solid #e0aa55;padding:9px 11px;border-radius:5px;margin:12px 0}
+          table{border-collapse:collapse;width:100%;background:white} th,td{border:1px solid #ddd;padding:7px;text-align:left;vertical-align:top}
+          th{background:#eee;position:sticky;top:0}.compatible,.current-row{background:#e8f7e8}.straight-only{background:#fff0f0}.current-row.straight-only{background:#ffe6cc}
+          </style></head><body>
+          <h1>Master Flow — Simple Duct catalog</h1>
+          <div class="note">Long modeled runs are visually continuous from the start and end you choose; stock-length metadata is retained for takeoff but no virtual stock joints are drawn. Beaded pipe keeps reinforcement/detailing. Inline Add Tee uses TS6 where compatible, and Add Wye Saddle uses 45YS4 on an equal-or-larger round main. Compatible register boxes, appliance wall vents, screened fresh-air vents, and end caps are offered through Add Vent.</div>
+          #{current_html}
+          <div class="warning"><b>Catalog truthfulness:</b> full-flow tees/wyes and side saddles are different product families. Simple Duct now keeps those placement behaviors separate.</div>
+          <h2>Buildability by duct size</h2>
+          <table><thead><tr><th>Duct size</th><th>Straight SKU(s)</th><th>Elbow(s)</th><th>Branches / Saddles</th><th>Transitions</th><th>Vents / Ends</th><th>Routing</th></tr></thead><tbody>#{availability_rows}</tbody></table>
+          #{details}
+          </body></html>
+        HTML
+      end
+
+      def product_connector_text(product)
+        case product.family
+        when :pipe
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" round; stock SKU length #{number_label(product.stock_length)}\" (continuous model run)"
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\"; stock SKU length #{number_label(product.stock_length)}\" (continuous model run)"
+          end
+        when :elbow
+          product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, adjustable through 90°" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", fixed 90°"
+        when :tee
+          "#{number_label(product.diameter)}\" full-flow 90° tee"
+        when :tee_saddle
+          "#{number_label(product.diameter)}\" main × #{number_label(product.branch_diameter)}\" branch, 90° saddle"
+        when :wye
+          outlet = product.outlet_diameter || product.branch_diameter || product.diameter
+          "#{number_label(product.diameter)}\" inlet → #{number_label(outlet)}\" + #{number_label(outlet)}\""
+        when :wye_saddle
+          "#{number_label(product.branch_diameter)}\" 45° branch on equal/larger round main"
+        when :register_box
+          "#{number_label(product.diameter)}\" round → #{number_label(product.width)}\" × #{number_label(product.height)}\" register opening"
+        when :register_box_saddle
+          "#{number_label(product.diameter)}\" round side saddle → #{number_label(product.width)}\" × #{number_label(product.height)}\" opening"
+        when :wall_vent
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" round terminal"
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" rectangular terminal"
+          end
+        when :fresh_air_vent
+          "#{number_label(product.diameter)}\" round screened intake terminal"
+        when :transition
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" ↔ #{number_label(product.branch_diameter)}\""
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" ↔ #{number_label(product.diameter)}\" round"
+          end
+        when :end_cover
+          product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round" : "#{number_label(product.width)}\" × #{number_label(product.height)}\""
+        else
+          ""
+        end
       end
     end
   end

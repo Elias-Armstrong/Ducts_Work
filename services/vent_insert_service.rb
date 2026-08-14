@@ -49,15 +49,23 @@ module DuctExtension
           dimensions: dimensions
         )
 
+        catalog_terminal_product = nil
+        catalog_side_product = nil
         if Catalog::Manager.active?(model)
           if end_port
-            return Catalog::Manager.notify_unsupported(:end_cover, dimensions) unless
-              Catalog::Manager.end_cover_product(dimensions, model)
+            terminal_products =
+              Catalog::Manager.end_cover_products(dimensions, model) +
+              Catalog::Manager.register_box_products(dimensions, model) +
+              Catalog::Manager.wall_vent_products(dimensions, model) +
+              Catalog::Manager.fresh_air_vent_products(dimensions, model)
+            return Catalog::Manager.notify_unsupported(:vent, dimensions) if terminal_products.empty?
+            catalog_terminal_product = Catalog::Manager.prompt_terminal_product(dimensions, model)
+            return nil unless catalog_terminal_product
           else
-            # The current Simple Duct side-register primitive does not closely
-            # match a catalog product with a fully specified trunk connection,
-            # so catalog mode deliberately refuses to substitute generic geometry.
-            return Catalog::Manager.notify_unsupported(:side_register, dimensions)
+            side_products = Catalog::Manager.register_box_saddle_products(dimensions, model)
+            return Catalog::Manager.notify_unsupported(:register_box_saddle, dimensions) if side_products.empty?
+            catalog_side_product = Catalog::Manager.prompt_register_box_saddle(dimensions, model)
+            return nil unless catalog_side_product
           end
         end
 
@@ -68,7 +76,31 @@ module DuctExtension
         ) do |operation|
 
         result =
-          if end_port
+          if end_port && catalog_terminal_product && catalog_terminal_product.family == :fresh_air_vent
+            insert_catalog_fresh_air_vent(
+              model: model,
+              duct_piece: duct_piece,
+              end_port: end_port,
+              dimensions: dimensions,
+              catalog_product: catalog_terminal_product
+            )
+          elsif end_port && catalog_terminal_product && catalog_terminal_product.family == :wall_vent
+            insert_catalog_wall_vent(
+              model: model,
+              duct_piece: duct_piece,
+              end_port: end_port,
+              dimensions: dimensions,
+              catalog_product: catalog_terminal_product
+            )
+          elsif end_port && catalog_terminal_product && catalog_terminal_product.family == :register_box
+            insert_catalog_register_box(
+              model: model,
+              duct_piece: duct_piece,
+              end_port: end_port,
+              dimensions: dimensions,
+              catalog_product: catalog_terminal_product
+            )
+          elsif end_port
             insert_end_cover(
               model: model,
               duct_piece: duct_piece,
@@ -76,7 +108,8 @@ module DuctExtension
               dimensions: dimensions,
               cover_diameter: cover_diameter,
               cover_width: cover_width,
-              cover_height: cover_height
+              cover_height: cover_height,
+              catalog_product: catalog_terminal_product
             )
           elsif repeat_enabled && repeat_interval.to_f > EPSILON
             insert_repeated_side_registers(
@@ -89,7 +122,8 @@ module DuctExtension
               register_bumped_out: register_bumped_out,
               repeat_direction: repeat_direction,
               repeat_interval: repeat_interval,
-              view: view
+              view: view,
+              catalog_product: catalog_side_product
             )
           else
             insert_side_register(
@@ -99,7 +133,8 @@ module DuctExtension
               dimensions: dimensions,
               register_width: register_width,
               register_height: register_height,
-              register_bumped_out: register_bumped_out
+              register_bumped_out: register_bumped_out,
+              catalog_product: catalog_side_product
             )
           end
 
@@ -119,9 +154,10 @@ module DuctExtension
         dimensions:,
         cover_diameter: nil,
         cover_width: nil,
-        cover_height: nil
+        cover_height: nil,
+        catalog_product: nil
       )
-        catalog_product = Catalog::Manager.end_cover_product(dimensions, model) if Catalog::Manager.active?(model)
+        catalog_product ||= Catalog::Manager.end_cover_product(dimensions, model) if Catalog::Manager.active?(model)
 
         group = model.active_entities.add_group
         group.name =
@@ -214,6 +250,113 @@ module DuctExtension
         nil
       end
 
+      def self.insert_catalog_fresh_air_vent(model:, duct_piece:, end_port:, dimensions:, catalog_product:)
+        return nil unless catalog_product && catalog_product.family == :fresh_air_vent
+
+        group = model.active_entities.add_group
+        group.name = "Master Flow #{catalog_product.sku} — Fresh Air Vent"
+        outward_axis = end_port.vector.clone
+        outward_axis.normalize!
+
+        success = Catalog::MasterFlowGeometry.build_fresh_air_vent(
+          group: group,
+          center: end_port.point,
+          axis: outward_axis,
+          product: catalog_product,
+          preferred_width_axis: end_port.respond_to?(:width_axis) ? end_port.width_axis : nil,
+          preferred_height_axis: end_port.respond_to?(:height_axis) ? end_port.height_axis : nil
+        )
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        Catalog::Manager.apply_product_metadata(group, catalog_product)
+        {
+          group: group,
+          vent_type: :catalog_fresh_air_vent,
+          dimensions: dimensions,
+          end_port: end_port,
+          product: catalog_product
+        }
+      rescue => error
+        puts "VentInsertService.insert_catalog_fresh_air_vent failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        group.erase! if group && group.valid?
+        nil
+      end
+
+      def self.insert_catalog_wall_vent(model:, duct_piece:, end_port:, dimensions:, catalog_product:)
+        return nil unless catalog_product && catalog_product.family == :wall_vent
+
+        group = model.active_entities.add_group
+        group.name = "Master Flow #{catalog_product.sku} — Appliance Wall Vent"
+        outward_axis = end_port.vector.clone
+        outward_axis.normalize!
+
+        success = Catalog::MasterFlowGeometry.build_wall_vent(
+          group: group,
+          center: end_port.point,
+          axis: outward_axis,
+          product: catalog_product,
+          preferred_width_axis: end_port.respond_to?(:width_axis) ? end_port.width_axis : nil,
+          preferred_height_axis: end_port.respond_to?(:height_axis) ? end_port.height_axis : nil
+        )
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        Catalog::Manager.apply_product_metadata(group, catalog_product)
+        {
+          group: group,
+          vent_type: :catalog_wall_vent,
+          dimensions: dimensions,
+          end_port: end_port,
+          product: catalog_product
+        }
+      rescue => error
+        puts "VentInsertService.insert_catalog_wall_vent failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        group.erase! if group && group.valid?
+        nil
+      end
+
+      def self.insert_catalog_register_box(model:, duct_piece:, end_port:, dimensions:, catalog_product:)
+        return nil unless catalog_product && catalog_product.family == :register_box
+        return nil unless dimensions[:shape] == :round
+
+        group = model.active_entities.add_group
+        group.name = "Master Flow #{catalog_product.sku} — Register Box"
+        outward_axis = end_port.vector.clone
+        outward_axis.normalize!
+
+        success = Catalog::MasterFlowGeometry.build_register_box(
+          group: group,
+          center: end_port.point,
+          axis: outward_axis,
+          product: catalog_product
+        )
+        unless success
+          group.erase! if group.valid?
+          return nil
+        end
+
+        Catalog::Manager.apply_product_metadata(group, catalog_product)
+        {
+          group: group,
+          vent_type: :catalog_register_box,
+          dimensions: dimensions,
+          end_port: end_port,
+          product: catalog_product
+        }
+      rescue => error
+        puts "VentInsertService.insert_catalog_register_box failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        group.erase! if group && group.valid?
+        nil
+      end
+
       def self.insert_side_register(
         model:,
         duct_piece:,
@@ -221,7 +364,8 @@ module DuctExtension
         dimensions:,
         register_width: nil,
         register_height: nil,
-        register_bumped_out: true
+        register_bumped_out: true,
+        catalog_product: nil
       )
         placement = side_register_placement(
           duct_piece: duct_piece,
@@ -239,7 +383,8 @@ module DuctExtension
           axis: placement[:axis],
           register_width: register_width,
           register_height: register_height,
-          register_bumped_out: register_bumped_out
+          register_bumped_out: register_bumped_out,
+          catalog_product: catalog_product
         )
       rescue => error
         puts "VentInsertService.insert_side_register failed: #{error.message}"
@@ -257,7 +402,8 @@ module DuctExtension
         register_bumped_out: true,
         repeat_direction: :right,
         repeat_interval: 24.0,
-        view: nil
+        view: nil,
+        catalog_product: nil
       )
         port_a = duct_piece.ports[0]
         port_b = duct_piece.ports[1]
@@ -315,7 +461,8 @@ module DuctExtension
             axis: axis,
             register_width: register_width,
             register_height: register_height,
-            register_bumped_out: register_bumped_out
+            register_bumped_out: register_bumped_out,
+            catalog_product: catalog_product
           )
 
           results << inserted if inserted
@@ -388,7 +535,8 @@ module DuctExtension
         axis:,
         register_width: nil,
         register_height: nil,
-        register_bumped_out: true
+        register_bumped_out: true,
+        catalog_product: nil
       )
         port_a = duct_piece.ports[0]
 
@@ -415,7 +563,9 @@ module DuctExtension
 
         group = model.active_entities.add_group
         group.name =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            "Master Flow #{catalog_product.sku} — Register Box Saddle"
+          elsif dimensions[:shape] == :rectangular
             "Rectangular Side Register Vent"
           else
             "Round Side Register Vent"
@@ -428,27 +578,46 @@ module DuctExtension
             nil
           end
 
-        success = Geometry::VentBuilder.build_side_register_into(
-          group,
-          center: base_center,
-          outward_axis: outward_axis,
-          duct_axis: axis,
-          plate_width: plate_width,
-          plate_height: plate_height,
-          opening_width: plate_width * 0.74,
-          opening_height: plate_height * 0.38,
-          bumped_out: register_bumped_out,
-          duct_diameter: duct_diameter_for_vent
-        )
+        if catalog_product
+          plate_width = catalog_product.width.to_f if catalog_product.width.to_f > 0.0
+          plate_height = catalog_product.height.to_f if catalog_product.height.to_f > 0.0
+        end
+
+        success =
+          if catalog_product
+            Catalog::MasterFlowGeometry.build_register_box_saddle(
+              group: group,
+              center: base_center,
+              outward_axis: outward_axis,
+              duct_axis: axis,
+              duct_diameter: duct_diameter_for_vent,
+              product: catalog_product
+            )
+          else
+            Geometry::VentBuilder.build_side_register_into(
+              group,
+              center: base_center,
+              outward_axis: outward_axis,
+              duct_axis: axis,
+              plate_width: plate_width,
+              plate_height: plate_height,
+              opening_width: plate_width * 0.74,
+              opening_height: plate_height * 0.38,
+              bumped_out: register_bumped_out,
+              duct_diameter: duct_diameter_for_vent
+            )
+          end
 
         unless success
           group.erase! if group.valid?
           return nil
         end
 
+        Catalog::Manager.apply_product_metadata(group, catalog_product) if catalog_product
+
         {
           group: group,
-          vent_type: :side_register,
+          vent_type: catalog_product ? :catalog_register_box_saddle : :side_register,
           dimensions: dimensions,
           base_center: base_center,
           outward_axis: outward_axis

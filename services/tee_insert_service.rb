@@ -16,8 +16,8 @@ module DuctExtension
         catalog_product = nil
         catalog_pipe_product = nil
         if Catalog::Manager.active?(model)
-          catalog_product = Catalog::Manager.tee_product(dimensions, model)
-          return Catalog::Manager.notify_unsupported(:tee, dimensions) unless catalog_product
+          catalog_product = Catalog::Manager.tee_saddle_product(dimensions, model)
+          return Catalog::Manager.notify_unsupported(:tee_saddle, dimensions) unless catalog_product
 
           catalog_pipe_product = Catalog::Manager.pipe_product(dimensions, model)
           return Catalog::Manager.notify_unsupported(:pipe, dimensions) unless catalog_pipe_product
@@ -72,12 +72,10 @@ module DuctExtension
         socket_depth = TeePlacementCalculator.socket_depth(dimensions)
         branch_socket_depth = TeePlacementCalculator.branch_socket_depth(dimensions)
         if catalog_product && dimensions[:shape] == :round
-          socket_depth = Catalog::Manager.tee_main_socket_depth(catalog_product, socket_depth)
-          branch_socket_depth = Catalog::Manager.tee_branch_socket_depth(
-            catalog_product,
-            dimensions,
-            branch_socket_depth
-          )
+          # Inline catalog tees use TS6 as a saddle on the existing main run.
+          # There is no full-flow tee body to remove from the main centerline.
+          socket_depth = 0.0
+          branch_socket_depth = [(catalog_product.branch_diameter || catalog_product.diameter).to_f * 1.10, 4.0].max
         end
 
         main_start_socket = center.offset(main_vector.clone.reverse, socket_depth)
@@ -195,7 +193,8 @@ module DuctExtension
           dimensions: dimensions,
           catalog_product: catalog_pipe_product,
           preferred_width_axis: rectangular_basis && rectangular_basis[:width_axis],
-          preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis]
+          preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis],
+          hide_end_boundary: !!catalog_product
         )
 
         pipe_b = build_pipe_piece(
@@ -206,7 +205,8 @@ module DuctExtension
           dimensions: dimensions,
           catalog_product: catalog_pipe_product,
           preferred_width_axis: rectangular_basis && rectangular_basis[:width_axis],
-          preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis]
+          preferred_height_axis: rectangular_basis && rectangular_basis[:height_axis],
+          hide_start_boundary: !!catalog_product
         )
 
         return nil unless pipe_a && pipe_b
@@ -214,7 +214,7 @@ module DuctExtension
         tee_group = model.active_entities.add_group
         tee_group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Duct Tee"
+            "Master Flow #{catalog_product.sku} — Tee Saddle"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Tee"
           else
@@ -237,13 +237,13 @@ module DuctExtension
             )
           else
             if catalog_product
-              Catalog::MasterFlowGeometry.build_round_tee(
+              Catalog::MasterFlowGeometry.build_round_tee_saddle(
                 group: tee_group,
                 center: center,
                 main_vector: main_vector,
                 branch_vector: branch_vector,
-                diameter: dimensions[:diameter],
-                main_depth: socket_depth,
+                main_diameter: dimensions[:diameter],
+                product: catalog_product,
                 branch_depth: branch_socket_depth
               )
             else
@@ -355,7 +355,9 @@ module DuctExtension
         dimensions:,
         catalog_product: nil,
         preferred_width_axis: nil,
-        preferred_height_axis: nil
+        preferred_height_axis: nil,
+        hide_start_boundary: false,
+        hide_end_boundary: false
       )
         vector = start_point.vector_to(end_point)
         return nil if vector.length == 0
@@ -373,7 +375,19 @@ module DuctExtension
           end
 
         success =
-          if dimensions[:shape] == :rectangular
+          if catalog_product
+            Catalog::MasterFlowGeometry.build_pipe(
+              group: group,
+              start_point: start_point,
+              end_point: end_point,
+              dimensions: dimensions,
+              product: catalog_product,
+              preferred_width_axis: preferred_width_axis,
+              preferred_height_axis: preferred_height_axis,
+              hide_start_boundary: hide_start_boundary,
+              hide_end_boundary: hide_end_boundary
+            )
+          elsif dimensions[:shape] == :rectangular
             Geometry::RectangularPipeBuilder.build_into(
               group,
               start_point,

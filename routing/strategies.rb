@@ -36,7 +36,6 @@ module DuctExtension
             source_vector = context.source_vector
             target_incoming_vector = context.target_incoming_vector
             dimensions = context.dimensions
-            bend_radius = RouteMath.bend_radius_for(dimensions)
 
             best_steps = nil
             best_score = nil
@@ -49,21 +48,24 @@ module DuctExtension
 
               first_angle = source_vector.angle_between(middle_direction)
               second_angle = middle_direction.angle_between(target_incoming_vector)
-              next unless RouteMath.valid_elbow_angle?(first_angle)
-              next unless RouteMath.valid_elbow_angle?(second_angle)
+              next unless RouteMath.valid_elbow_angle?(first_angle, dimensions)
+              next unless RouteMath.valid_elbow_angle?(second_angle, dimensions)
+
+              first_bend_radius = RouteMath.bend_radius_for(dimensions, angle: first_angle)
+              second_bend_radius = RouteMath.bend_radius_for(dimensions, angle: second_angle)
 
               first_exit = RouteMath.elbow_exit_point(
                 start_point,
                 source_vector,
                 middle_direction,
-                bend_radius
+                first_bend_radius
               )
               next unless first_exit
 
               second_delta = RouteMath.elbow_exit_delta(
                 entry_vector: middle_direction,
                 exit_vector: target_incoming_vector,
-                bend_radius: bend_radius
+                bend_radius: second_bend_radius
               )
               next unless second_delta
 
@@ -89,7 +91,7 @@ module DuctExtension
                     start_point: start_point,
                     entry_vector: source_vector,
                     exit_vector: middle_direction,
-                    bend_radius: bend_radius
+                    bend_radius: first_bend_radius
                   )
                 ),
                 Model::BuildStep.new(
@@ -105,7 +107,7 @@ module DuctExtension
                     start_point: second_start,
                     entry_vector: middle_direction,
                     exit_vector: target_incoming_vector,
-                    bend_radius: bend_radius
+                    bend_radius: second_bend_radius
                   )
                 )
               ]
@@ -150,13 +152,10 @@ module DuctExtension
       module Strategies
         module OneElbowStrategy
           def self.steps(context)
-            bend_radius = RouteMath.bend_radius_for(context.dimensions)
-
-            direct_target_steps(context, bend_radius) ||
-              target_approach_steps(context, bend_radius)
+            direct_target_steps(context) || target_approach_steps(context)
           end
 
-          def self.direct_target_steps(context, bend_radius)
+          def self.direct_target_steps(context)
             path = context.start_point.vector_to(context.target_point)
             return nil if path.length < RouteMath::MIN_ROUTE_LENGTH
 
@@ -165,7 +164,8 @@ module DuctExtension
             return nil if context.target_incoming_vector.dot(path_direction) < RouteMath::TARGET_ALIGNMENT_DOT
 
             source_angle = context.source_vector.angle_between(path_direction)
-            return nil unless RouteMath.valid_elbow_angle?(source_angle)
+            return nil unless RouteMath.valid_elbow_angle?(source_angle, context.dimensions)
+            bend_radius = RouteMath.bend_radius_for(context.dimensions, angle: source_angle)
 
             elbow_exit = RouteMath.elbow_exit_point(
               context.start_point,
@@ -204,12 +204,13 @@ module DuctExtension
           end
           private_class_method :direct_target_steps
 
-          def self.target_approach_steps(context, bend_radius)
+          def self.target_approach_steps(context)
             final_direction = context.target_incoming_vector.clone
             final_direction.normalize!
 
             source_angle = context.source_vector.angle_between(final_direction)
-            return nil unless RouteMath.valid_elbow_angle?(source_angle)
+            return nil unless RouteMath.valid_elbow_angle?(source_angle, context.dimensions)
+            bend_radius = RouteMath.bend_radius_for(context.dimensions, angle: source_angle)
 
             elbow_exit = RouteMath.elbow_exit_point(
               context.start_point,
@@ -260,7 +261,6 @@ module DuctExtension
       module Strategies
         module DoglegStrategy
           def self.steps(context)
-            bend_radius = RouteMath.bend_radius_for(context.dimensions)
             best_steps = nil
             best_score = nil
 
@@ -270,18 +270,25 @@ module DuctExtension
               next if dogleg_direction.parallel?(context.source_vector)
               next if dogleg_direction.parallel?(context.target_incoming_vector)
 
+              first_angle = context.source_vector.angle_between(dogleg_direction)
+              second_angle = dogleg_direction.angle_between(context.target_incoming_vector)
+              next unless RouteMath.valid_elbow_angle?(first_angle, context.dimensions)
+              next unless RouteMath.valid_elbow_angle?(second_angle, context.dimensions)
+              first_bend_radius = RouteMath.bend_radius_for(context.dimensions, angle: first_angle)
+              second_bend_radius = RouteMath.bend_radius_for(context.dimensions, angle: second_angle)
+
               first_exit = RouteMath.elbow_exit_point(
                 context.start_point,
                 context.source_vector,
                 dogleg_direction,
-                bend_radius
+                first_bend_radius
               )
               next unless first_exit
 
               second_delta = RouteMath.elbow_exit_delta(
                 entry_vector: dogleg_direction,
                 exit_vector: context.target_incoming_vector,
-                bend_radius: bend_radius
+                bend_radius: second_bend_radius
               )
               next unless second_delta
 
@@ -319,7 +326,7 @@ module DuctExtension
                     start_point: context.start_point,
                     entry_vector: context.source_vector,
                     exit_vector: dogleg_direction,
-                    bend_radius: bend_radius
+                    bend_radius: first_bend_radius
                   )
                 ),
                 Model::BuildStep.new(
@@ -335,7 +342,7 @@ module DuctExtension
                     start_point: second_start,
                     entry_vector: dogleg_direction,
                     exit_vector: context.target_incoming_vector,
-                    bend_radius: bend_radius
+                    bend_radius: second_bend_radius
                   )
                 ),
                 Model::BuildStep.new(

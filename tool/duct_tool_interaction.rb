@@ -70,6 +70,10 @@ module DuctExtension
           select_fitting_mode(:tee, round_tee_from_click: true)
         }
 
+        components_menu.add_item("Add Wye Saddle (45°)") {
+          select_fitting_mode(:wye_saddle, round_tee_from_click: true)
+        }
+
         components_menu.add_item("End Tee") {
           select_fitting_mode(:end_tee, round_tee_from_click: true)
         }

@@ -54,6 +54,21 @@ module DuctExtension
 
           turn_angle = start_vector.angle_between(requested_direction)
 
+          if Catalog::Manager.active?(Sketchup.active_model) && fitting_mode == :elbow
+            product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+            if product
+              # Treat a nearly straight setting as a straight run. A single
+              # adjustable round Master Flow elbow is limited to through 90°;
+              # larger reversals require another fitting/run.
+              if turn_angle <= MIN_ELBOW_ANGLE
+                fitting_mode = :straight
+              elsif !Catalog::Manager.elbow_angle_supported?(product, dimensions, turn_angle)
+                Sketchup.status_text = Catalog::Manager.elbow_angle_status(product, dimensions, turn_angle)
+                return []
+              end
+            end
+          end
+
           if fitting_mode == :elbow && valid_elbow_angle?(turn_angle)
             if tee_port?(start_port)
               tee_steps = plan_from_tee_port_with_exit_stub(
@@ -149,7 +164,8 @@ module DuctExtension
 
         stub_end = start_point.offset(start_vector, stub_length)
 
-        bend_radius = bend_radius_for(dimensions)
+        elbow_angle = start_vector.angle_between(requested_direction)
+        bend_radius = bend_radius_for(dimensions, angle: elbow_angle)
 
         elbow_exit = elbow_exit_point(
           stub_end,
@@ -265,7 +281,8 @@ module DuctExtension
         dimensions:,
         min_length:
       )
-        bend_radius = bend_radius_for(dimensions)
+        elbow_angle = start_vector.angle_between(requested_direction)
+        bend_radius = bend_radius_for(dimensions, angle: elbow_angle)
 
         elbow_exit = elbow_exit_point(
           start_point,
@@ -311,7 +328,7 @@ module DuctExtension
         ]
       end
 
-      def self.bend_radius_for(dimensions)
+      def self.bend_radius_for(dimensions, angle: nil)
         fallback =
           if dimensions[:shape] == :rectangular
             [dimensions[:width].to_f, dimensions[:height].to_f].max * DEFAULT_BEND_RADIUS_FACTOR
@@ -321,7 +338,7 @@ module DuctExtension
 
         if Catalog::Manager.active?(Sketchup.active_model)
           product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
-          return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback) if product
+          return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback, angle: angle) if product
         end
 
         fallback
