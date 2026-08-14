@@ -62,6 +62,7 @@ require_relative 'geometry/reducer_builder'
 require_relative 'geometry/vent_builder'
 require_relative 'geometry/vent_side_register_geometry'
 require_relative 'geometry/vent_detail_geometry'
+require_relative 'catalog/master_flow_geometry'
 
 # ===== CORE SERVICES =====
 require_relative 'services/network_persistence_service'
@@ -96,6 +97,8 @@ require_relative 'routing/geometry_executor'
 require_relative 'routing/connection_service'
 
 # ===== TOOL =====
+# IMPORTANT: Keep this tool composition on the P8/661b62b baseline that has
+# now been runtime-confirmed to receive SketchUp's right-click getMenu callback.
 require_relative 'tool/duct_tool_interaction'
 require_relative 'tool/duct_tool_components'
 require_relative 'tool/duct_tool_navigation'
@@ -109,9 +112,15 @@ DuctExtension::Toolbar.create
 
 module CustomDuctExtension
   unless @simple_duct_menu_created
-    menu = UI.menu("Plugins").add_submenu("Simple Duct Extension")
+    menu = UI.menu("Extensions").add_submenu("Simple Duct Extension")
 
-    menu.add_item("Set Catalog...") { DuctExtension::UIActions.set_catalog }
+    catalog_menu = menu.add_submenu("Catalog")
+    catalog_menu.add_item("Set Catalog...") { DuctExtension::UIActions.set_catalog }
+    catalog_menu.add_separator
+    catalog_menu.add_item("Browse Active Catalog...") { DuctExtension::UIActions.browse_catalog }
+    catalog_menu.add_item("Current Size / Availability...") { DuctExtension::UIActions.current_catalog_options }
+    catalog_menu.add_item("Choose Current Duct / Elbow Products...") { DuctExtension::UIActions.choose_catalog_products }
+
     menu.add_separator
     menu.add_item("Draw Orthogonal Duct") { DuctExtension::UIActions.draw_duct }
     menu.add_item("Resize Selected Duct Pieces") { DuctExtension::UIActions.resize_selection }
@@ -122,4 +131,3 @@ module CustomDuctExtension
     file_loaded(__FILE__) unless file_loaded?(__FILE__)
   end
 end
-

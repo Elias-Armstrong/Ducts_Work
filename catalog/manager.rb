@@ -386,7 +386,7 @@ module DuctExtension
         shape = shape_input[0].to_s.downcase.start_with?("rect") ? :rectangular : :round
         products = pipe_products(shape, model)
         if products.empty?
-          ::UI.messagebox("No supported Master Flow #{shape} straight-duct products are loaded in this pilot catalog.")
+          ::UI.messagebox("No Master Flow #{shape} straight-duct product in the loaded catalog matches this selection.")
           return nil
         end
 
@@ -461,7 +461,7 @@ module DuctExtension
         targets = allowed_branch_targets(main, family: family, model: model)
 
         if products.empty? || targets.empty?
-          ::UI.messagebox("Master Flow has no supported #{family} for this duct size in the pilot catalog.")
+          ::UI.messagebox("Master Flow has no modeled #{family} product with an inlet matching this duct size.")
           return nil
         end
 
@@ -498,7 +498,7 @@ module DuctExtension
         model ||= Sketchup.active_model if defined?(Sketchup)
         targets = transition_targets(source_dimensions, model)
         if targets.empty?
-          ::UI.messagebox("There is no supported Master Flow reducer/stack-boot transition from this size in the pilot catalog.")
+          ::UI.messagebox("There is no Master Flow reducer/stack-boot in the loaded catalog that connects from this size.")
           return nil
         end
 
@@ -560,7 +560,7 @@ module DuctExtension
 
       def unsupported_message(family, dimensions = nil)
         detail = dimensions ? " for #{dimensions_label(dimensions)}" : ""
-        "Master Flow catalog mode has no supported #{family.to_s.tr('_', ' ')}#{detail} in this pilot. No generic fitting was created."
+        "Master Flow catalog mode has no supported #{family.to_s.tr('_', ' ')}#{detail} in the loaded catalog. No generic fitting was created."
       end
 
       def notify_unsupported(family, dimensions = nil)
@@ -643,6 +643,624 @@ module DuctExtension
       def number_label(value)
         number = value.to_f
         (number - number.round).abs < 0.0001 ? number.round.to_s : number.to_s.sub(/0+$/, '').sub(/\.$/, '')
+      end
+    end
+  end
+end
+
+# ===== Catalog-mode UX and rigid-product helpers =====
+module DuctExtension
+  module Catalog
+    module Manager
+      module_function
+
+      def catalog_locked_piece?(piece_or_group)
+        group = piece_or_group.respond_to?(:group) ? piece_or_group.group : piece_or_group
+        return false unless group && group.valid?
+        key = group.get_attribute(DICTIONARY, "catalog_key")
+        !key.to_s.empty? && key.to_s != BASE_KEY.to_s
+      rescue
+        false
+      end
+
+      def junction_products(dimensions, family, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        return [] unless dims.round?
+
+        all_products(model).select do |product|
+          product.family == family.to_sym && close?(product.diameter, dims.diameter)
+        end
+      rescue
+        []
+      end
+
+      def prompt_junction_product(main_dimensions:, family:, title:, model: nil)
+        model ||= Sketchup.active_model if defined?(Sketchup)
+        return nil unless active?(model)
+
+        products = junction_products(main_dimensions, family, model)
+        if products.empty?
+          ::UI.messagebox("Master Flow has no #{family} with an inlet matching #{dimensions_label(main_dimensions)}.")
+          return nil
+        end
+
+        preferred = preferred_junction(model, main_dimensions, family) || products.first
+        input = ::UI.inputbox(
+          ["#{family.to_s.capitalize} Product:"],
+          [preferred.label],
+          [products.map(&:label).join("|")],
+          title
+        )
+        return nil unless input
+
+        chosen = products.find { |product| product.label == input[0].to_s } || preferred
+        save_junction_preference(model, main_dimensions, family, chosen)
+        chosen
+      rescue => error
+        puts "Catalog::Manager.prompt_junction_product failed: #{error.message}"
+        nil
+      end
+
+      def wye_output_dimensions(product)
+        return nil unless product && product.family == :wye
+        diameter = (product.outlet_diameter || product.branch_diameter || product.diameter).to_f
+        return nil unless diameter > 0.0
+        Model::DuctDimensions.round(diameter: diameter)
+      rescue
+        nil
+      end
+
+      def compatible_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+
+        all_products(model).select do |product|
+          case product.family
+          when :pipe, :elbow, :tee, :wye
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          when :transition
+            if product.shape.to_sym == :round && dims.round?
+              close?(product.diameter, dims.diameter) || close?(product.branch_diameter, dims.diameter)
+            elsif product.shape.to_sym == :mixed
+              (dims.round? && close?(product.diameter, dims.diameter)) ||
+                (dims.rectangular? && rectangular_size_match?(product.width, product.height, dims.width, dims.height))
+            else
+              false
+            end
+          when :end_cover
+            dims.rectangular? && rectangular_size_match?(product.width, product.height, dims.width, dims.height)
+          else
+            false
+          end
+        end
+      rescue
+        []
+      end
+
+      def products_grouped_by_family(model = nil)
+        groups = Hash.new { |hash, key| hash[key] = [] }
+        all_products(model).each { |product| groups[product.family] << product }
+        groups
+      end
+
+      def size_availability_text(dimensions, model = nil)
+        model ||= Sketchup.active_model if defined?(Sketchup)
+        dims = Model::DuctDimensions.coerce(dimensions)
+        products = compatible_products(dims, model)
+        groups = products.group_by(&:family)
+
+        labels = {
+          pipe: "Straight duct",
+          elbow: "Elbows",
+          tee: "Tees",
+          wye: "Wyes",
+          transition: "Reducers / converters",
+          end_cover: "End covers"
+        }
+
+        lines = ["Master Flow options for #{dimensions_label(dims)}:"]
+        labels.each do |family, label|
+          matches = Array(groups[family])
+          if matches.empty?
+            lines << "  #{label}: none"
+          else
+            lines << "  #{label}: #{matches.map(&:sku).join(', ')}"
+          end
+        end
+        lines.join("\n")
+      rescue
+        "No availability summary could be generated."
+      end
+
+      def show_catalog_browser(model = nil, dimensions: nil)
+        model ||= Sketchup.active_model if defined?(Sketchup)
+        unless active?(model)
+          ::UI.messagebox("No product catalog is active. Choose Set Catalog... first.")
+          return false
+        end
+
+        if defined?(::UI::HtmlDialog)
+          dialog = ::UI::HtmlDialog.new(
+            dialog_title: "Master Flow Catalog — Supported Simple Duct Products",
+            preferences_key: "SimpleDuctMasterFlowCatalogBrowser",
+            scrollable: true,
+            resizable: true,
+            width: 900,
+            height: 720,
+            style: ::UI::HtmlDialog::STYLE_DIALOG
+          )
+          dialog.set_html(catalog_browser_html(model, dimensions: dimensions))
+          dialog.show
+          @catalog_browser_dialog = dialog
+          true
+        else
+          text = dimensions ? size_availability_text(dimensions, model) : catalog_plain_text(model)
+          ::UI.messagebox(text)
+          true
+        end
+      rescue => error
+        puts "Catalog::Manager.show_catalog_browser failed: #{error.message}"
+        ::UI.messagebox(catalog_plain_text(model)) rescue nil
+        false
+      end
+
+      def catalog_browser_html(model, dimensions: nil)
+        current = dimensions && Model::DuctDimensions.coerce(dimensions)
+        groups = products_grouped_by_family(model)
+        family_names = {
+          pipe: "Straight Duct",
+          elbow: "Elbows",
+          tee: "Tees",
+          wye: "Wyes",
+          transition: "Reducers / Stack Boots",
+          end_cover: "End Covers"
+        }
+
+        rows = family_names.map do |family, heading|
+          products = Array(groups[family]).sort_by { |p| [p.shape.to_s, p.diameter.to_f, p.width.to_f, p.sku.to_s] }
+          body = products.map do |product|
+            compatible = current ? compatible_products(current, model).include?(product) : false
+            klass = compatible ? "compatible" : ""
+            "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td></tr>"
+          end.join
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Connections / stock size</th></tr></thead><tbody>#{body}</tbody></table></section>"
+        end.join
+
+        current_html =
+          if current
+            "<div class='current'><b>Current duct:</b> #{html_escape(dimensions_label(current))}. Highlighted rows can connect to or are this size.</div>"
+          else
+            "<div class='current'>Tip: open this browser from the drawing tool to highlight products compatible with the current duct size.</div>"
+          end
+
+        <<~HTML
+          <!doctype html>
+          <html><head><meta charset="utf-8"><style>
+          body{font-family:Arial,sans-serif;margin:18px;color:#222;background:#fafafa}
+          h1{margin:0 0 8px;font-size:24px} h2{font-size:18px;margin-top:26px;border-bottom:1px solid #bbb;padding-bottom:5px}
+          .current{background:#eef5ff;border:1px solid #9bbce6;padding:10px 12px;border-radius:6px;margin:14px 0}
+          .note{font-size:13px;color:#555;margin-bottom:14px}
+          table{border-collapse:collapse;width:100%;background:white} th,td{border:1px solid #ddd;padding:7px;text-align:left;vertical-align:top}
+          th{background:#eee}.compatible{background:#e8f7e8}.legend{font-size:12px;margin-top:6px}.swatch{display:inline-block;width:12px;height:12px;background:#e8f7e8;border:1px solid #aaa;vertical-align:middle}
+          </style></head><body>
+          <h1>Master Flow — supported catalog products</h1>
+          <div class="note">Only product families Simple Duct currently knows how to model are listed. No generic fitting is substituted when a required catalog product does not exist.</div>
+          #{current_html}
+          <div class="legend"><span class="swatch"></span> compatible with current duct</div>
+          #{rows}
+          </body></html>
+        HTML
+      end
+      private_class_method :catalog_browser_html
+
+      def catalog_plain_text(model)
+        groups = products_grouped_by_family(model)
+        groups.keys.sort_by(&:to_s).map do |family|
+          "#{family.to_s.upcase}:\n  " + groups[family].map(&:sku).join(", ")
+        end.join("\n\n")
+      rescue
+        "Master Flow catalog"
+      end
+      private_class_method :catalog_plain_text
+
+      def product_connector_text(product)
+        case product.family
+        when :pipe
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" round × #{number_label(product.stock_length)}\" stock"
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" × #{number_label(product.stock_length)}\" stock"
+          end
+        when :elbow
+          product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, 90° configured" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", 90°"
+        when :tee
+          "#{number_label(product.diameter)}\" × #{number_label(product.diameter)}\" × #{number_label(product.diameter)}\""
+        when :wye
+          outlet = product.outlet_diameter || product.branch_diameter || product.diameter
+          "#{number_label(product.diameter)}\" inlet → #{number_label(outlet)}\" + #{number_label(outlet)}\""
+        when :transition
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" ↔ #{number_label(product.branch_diameter)}\""
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" ↔ #{number_label(product.diameter)}\" round"
+          end
+        when :end_cover
+          "#{number_label(product.width)}\" × #{number_label(product.height)}\""
+        else
+          ""
+        end
+      end
+      private_class_method :product_connector_text
+
+      def html_escape(text)
+        text.to_s.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;").gsub('"', "&quot;")
+      end
+      private_class_method :html_escape
+
+      # ---- Catalog v3 usability / coverage helpers ---------------------------
+
+      def end_cover_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+
+        all_products(model).select do |product|
+          next false unless product.family == :end_cover
+
+          if dims.round?
+            product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+          else
+            product.shape.to_sym == :rectangular && rectangular_size_match?(
+              product.width, product.height, dims.width, dims.height
+            )
+          end
+        end
+      rescue
+        []
+      end
+
+      def end_cover_product(dimensions, model = nil)
+        end_cover_products(dimensions, model).first
+      rescue
+        nil
+      end
+
+      def compatible_products(dimensions, model = nil)
+        return [] unless active?(model)
+        dims = Model::DuctDimensions.coerce(dimensions)
+
+        all_products(model).select do |product|
+          case product.family
+          when :pipe, :elbow, :tee, :wye
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          when :transition
+            if product.shape.to_sym == :round && dims.round?
+              close?(product.diameter, dims.diameter) || close?(product.branch_diameter, dims.diameter)
+            elsif product.shape.to_sym == :mixed
+              (dims.round? && close?(product.diameter, dims.diameter)) ||
+                (dims.rectangular? && rectangular_size_match?(product.width, product.height, dims.width, dims.height))
+            else
+              false
+            end
+          when :end_cover
+            if dims.round?
+              product.shape.to_sym == :round && close?(product.diameter, dims.diameter)
+            else
+              product.shape.to_sym == :rectangular && rectangular_size_match?(
+                product.width, product.height, dims.width, dims.height
+              )
+            end
+          else
+            false
+          end
+        end
+      rescue
+        []
+      end
+
+      def pipe_buildability(product, model = nil)
+        return {} unless product && product.family == :pipe
+        dims = dimensions_for_pipe_product(product)
+        {
+          dimensions: dims,
+          elbows: elbow_products(dims, model),
+          tees: junction_products(dims, :tee, model),
+          wyes: junction_products(dims, :wye, model),
+          transitions: transition_targets(dims, model),
+          covers: end_cover_products(dims, model)
+        }
+      rescue
+        {}
+      end
+
+      def pipe_selection_label(product, model = nil)
+        availability = pipe_buildability(product, model)
+        elbows = Array(availability[:elbows])
+        turn_text = elbows.empty? ? "STRAIGHT-ONLY: no catalog elbow" : "turns: #{elbows.map(&:sku).join(' / ')}"
+        "#{product.label}  [#{turn_text}]"
+      rescue
+        product ? product.label : "Unknown catalog product"
+      end
+
+      # Catalog mode now warns about a straight product that has no corresponding
+      # elbow before the user commits to it. The product is still available because
+      # it genuinely exists in RESMF164; the UI simply makes its limitations clear.
+      def prompt_duct_settings(
+        model:,
+        current_shape:,
+        current_diameter:,
+        current_width:,
+        current_height:,
+        current_increment:
+      )
+        shape_input = ::UI.inputbox(
+          ["Duct Shape:"],
+          [current_shape.to_sym == :rectangular ? "Rectangular" : "Round"],
+          ["Round|Rectangular"],
+          "Master Flow Duct Settings"
+        )
+        return nil unless shape_input
+
+        shape = shape_input[0].to_s.downcase.start_with?("rect") ? :rectangular : :round
+        products = pipe_products(shape, model)
+        if products.empty?
+          ::UI.messagebox("No Master Flow #{shape} straight-duct product exists in the loaded catalog.")
+          return nil
+        end
+
+        current_dims =
+          if shape == :round
+            Model::DuctDimensions.round(diameter: current_diameter)
+          else
+            Model::DuctDimensions.rectangular(width: current_width, height: current_height)
+          end
+
+        selected = pipe_product(current_dims, model) || products.first
+        labels = products.map { |product| pipe_selection_label(product, model) }
+        default_label = pipe_selection_label(selected, model)
+
+        product_input = ::UI.inputbox(
+          ["Duct Product:"],
+          [default_label],
+          [labels.join("|")],
+          "Master Flow Duct Product"
+        )
+        return nil unless product_input
+
+        selected_index = labels.index(product_input[0].to_s)
+        selected = selected_index ? products[selected_index] : selected
+        dimensions = dimensions_for_pipe_product(selected)
+        save_pipe_preference(model, dimensions, selected)
+        elbows = elbow_products(dimensions, model)
+
+        if elbows.empty?
+          availability = size_availability_text(dimensions, model)
+          warning =
+            "#{selected.sku} is a real Master Flow straight-duct product, but RESMF164 lists no matching elbow for #{dimensions_label(dimensions)}.\n\n" \
+            "In strict catalog mode this size can continue straight and can use only the compatible products listed below; Simple Duct will not invent a generic elbow.\n\n" \
+            "#{availability}\n\nContinue with this straight-only size?"
+          answer = ::UI.messagebox(warning, MB_YESNO)
+          return nil unless answer == IDYES
+
+          elbow_label = "No catalog elbow for this size — straight continuation only"
+          elbow_input = ::UI.inputbox(
+            ["Elbow Product:", "Length Increment:"],
+            [elbow_label, increment_label(current_increment)],
+            [elbow_label, "1/4 inch|1/2 inch|1 inch"],
+            "Master Flow Routing Product"
+          )
+          return nil unless elbow_input
+          chosen_elbow = nil
+          increment_value = elbow_input[1]
+        else
+          preferred = preferred_elbow(model, dimensions) || elbows.first
+          elbow_labels = elbows.map(&:label)
+          elbow_input = ::UI.inputbox(
+            ["Elbow Product:", "Length Increment:"],
+            [preferred.label, increment_label(current_increment)],
+            [elbow_labels.join("|"), "1/4 inch|1/2 inch|1 inch"],
+            "Master Flow Routing Product"
+          )
+          return nil unless elbow_input
+          chosen_elbow = elbows.find { |product| product.label == elbow_input[0].to_s } || preferred
+          increment_value = elbow_input[1]
+          save_elbow_preference(model, dimensions, chosen_elbow)
+        end
+
+        {
+          shape: dimensions[:shape],
+          diameter: dimensions[:diameter],
+          width: dimensions[:width],
+          height: dimensions[:height],
+          length_increment: increment_from_label(increment_value, current_increment),
+          pipe_product: selected,
+          elbow_product: chosen_elbow
+        }
+      rescue => error
+        puts "Catalog::Manager.prompt_duct_settings failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        nil
+      end
+
+      def catalog_size_rows(model = nil)
+        rows = {}
+        pipe_products(:round, model).each do |product|
+          dims = dimensions_for_pipe_product(product)
+          key = dimensions_signature(dims)
+          rows[key] ||= { dimensions: dims, pipes: [] }
+          rows[key][:pipes] << product
+        end
+        pipe_products(:rectangular, model).each do |product|
+          dims = dimensions_for_pipe_product(product)
+          key = dimensions_signature(dims)
+          rows[key] ||= { dimensions: dims, pipes: [] }
+          rows[key][:pipes] << product
+        end
+
+        rows.values.each do |row|
+          dims = row[:dimensions]
+          row[:elbows] = elbow_products(dims, model)
+          row[:tees] = junction_products(dims, :tee, model)
+          row[:wyes] = junction_products(dims, :wye, model)
+          row[:transitions] = compatible_products(dims, model).select { |p| p.family == :transition }
+          row[:covers] = end_cover_products(dims, model)
+        end
+
+        rows.values.sort_by do |row|
+          dims = row[:dimensions]
+          dims.round? ? [0, dims.diameter.to_f, 0] : [1, -dims.width.to_f, -dims.height.to_f]
+        end
+      rescue
+        []
+      end
+
+      def catalog_browser_html(model, dimensions: nil)
+        current = dimensions && Model::DuctDimensions.coerce(dimensions)
+        groups = products_grouped_by_family(model)
+        family_names = {
+          pipe: "Straight Duct",
+          elbow: "Elbows",
+          tee: "Tees",
+          wye: "Wyes",
+          transition: "Reducers / Stack Boots",
+          end_cover: "End Covers"
+        }
+
+        availability_rows = catalog_size_rows(model).map do |row|
+          dims = row[:dimensions]
+          is_current = current && dimensions_signature(current) == dimensions_signature(dims)
+          has_elbow = !Array(row[:elbows]).empty?
+          css = [is_current ? "current-row" : nil, has_elbow ? nil : "straight-only"].compact.join(" ")
+          transitions = Array(row[:transitions]).map(&:sku)
+          <<~ROW
+            <tr class="#{css}">
+              <td><b>#{html_escape(dimensions_label(dims))}</b></td>
+              <td>#{html_escape(Array(row[:pipes]).map(&:sku).join(', '))}</td>
+              <td>#{html_escape(Array(row[:elbows]).map(&:sku).join(', ').yield_self { |x| x.empty? ? 'NONE' : x })}</td>
+              <td>#{html_escape(Array(row[:tees]).map(&:sku).join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td>#{html_escape(Array(row[:wyes]).map(&:sku).join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td>#{html_escape(transitions.join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td>#{html_escape(Array(row[:covers]).map(&:sku).join(', ').yield_self { |x| x.empty? ? '—' : x })}</td>
+              <td><b>#{has_elbow ? 'TURNABLE' : 'STRAIGHT ONLY'}</b></td>
+            </tr>
+          ROW
+        end.join
+
+        details = family_names.map do |family, heading|
+          products = Array(groups[family]).sort_by { |p| [p.shape.to_s, p.diameter.to_f, p.width.to_f, p.sku.to_s] }
+          body = products.map do |product|
+            compatible = current ? compatible_products(current, model).include?(product) : false
+            klass = compatible ? "compatible" : ""
+            "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td><td>#{html_escape(product_envelope_text(product))}</td></tr>"
+          end.join
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / stock size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
+        end.join
+
+        current_html =
+          if current
+            "<div class='current'><b>Current duct:</b> #{html_escape(dimensions_label(current))}. The matching size row and compatible products are highlighted.</div>"
+          else
+            "<div class='current'>Start here: the table below shows which straight duct sizes can actually turn, branch, transition, or terminate using the loaded Master Flow catalog.</div>"
+          end
+
+        <<~HTML
+          <!doctype html>
+          <html><head><meta charset="utf-8"><style>
+          body{font-family:Arial,sans-serif;margin:18px;color:#222;background:#fafafa}
+          h1{margin:0 0 8px;font-size:24px} h2{font-size:18px;margin-top:28px;border-bottom:1px solid #bbb;padding-bottom:5px}
+          .current{background:#eef5ff;border:1px solid #9bbce6;padding:10px 12px;border-radius:6px;margin:14px 0}
+          .note{font-size:13px;color:#555;margin-bottom:14px}.warning{background:#fff2d9;border:1px solid #e0aa55;padding:9px 11px;border-radius:5px;margin:12px 0}
+          table{border-collapse:collapse;width:100%;background:white} th,td{border:1px solid #ddd;padding:7px;text-align:left;vertical-align:top}
+          th{background:#eee;position:sticky;top:0}.compatible,.current-row{background:#e8f7e8}.straight-only{background:#fff0f0}.current-row.straight-only{background:#ffe6cc}
+          .legend{font-size:12px;margin:8px 0}.green,.red{display:inline-block;width:12px;height:12px;border:1px solid #aaa;vertical-align:middle;margin-right:4px}.green{background:#e8f7e8}.red{background:#fff0f0}
+          </style></head><body>
+          <h1>Master Flow — Simple Duct catalog</h1>
+          <div class="note">Only product families Simple Duct currently models are shown. A missing fitting is treated as genuinely unavailable in strict catalog mode; the extension does not substitute generic geometry. SKU/model numbers, nominal connector sizes, and stock lengths are the catalog-authoritative values. Physical-envelope values are shown separately only where a measurement is loaded, so nominal size is never confused with body geometry.</div>
+          #{current_html}
+          <div class="warning"><b>Important:</b> Master Flow sells several rectangular straight-duct sizes without a matching elbow in RESMF164. Those rows are intentionally marked <b>STRAIGHT ONLY</b>.</div>
+          <h2>Buildability by duct size</h2>
+          <div class="legend"><span class="green"></span> current/turnable &nbsp;&nbsp; <span class="red"></span> no catalog elbow</div>
+          <table><thead><tr><th>Duct size</th><th>Straight SKU(s)</th><th>Elbow(s)</th><th>Tee(s)</th><th>Wye(s)</th><th>Transitions</th><th>Caps</th><th>Routing</th></tr></thead><tbody>#{availability_rows}</tbody></table>
+          #{details}
+          </body></html>
+        HTML
+      end
+      private_class_method :catalog_browser_html
+
+      def product_connector_text(product)
+        case product.family
+        when :pipe
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" round × #{number_label(product.stock_length)}\" stock"
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" × #{number_label(product.stock_length)}\" stock"
+          end
+        when :elbow
+          product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, 90° configured" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", 90°"
+        when :tee
+          "#{number_label(product.diameter)}\" × #{number_label(product.diameter)}\" × #{number_label(product.diameter)}\""
+        when :wye
+          outlet = product.outlet_diameter || product.branch_diameter || product.diameter
+          "#{number_label(product.diameter)}\" inlet → #{number_label(outlet)}\" + #{number_label(outlet)}\""
+        when :transition
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" ↔ #{number_label(product.branch_diameter)}\""
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\" ↔ #{number_label(product.diameter)}\" round"
+          end
+        when :end_cover
+          if product.shape.to_sym == :round
+            "#{number_label(product.diameter)}\" round"
+          else
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\""
+          end
+        else
+          ""
+        end
+      end
+      private_class_method :product_connector_text
+
+      def product_envelope_text(product)
+        overall = product && product.overall
+        return "—" unless overall.is_a?(Hash) && !overall.empty?
+
+        parts = []
+        parts << "H #{number_label(overall[:height])}\"" if overall[:height].to_f > 0.0
+        parts << "W #{number_label(overall[:width])}\"" if overall[:width].to_f > 0.0
+        parts << "L #{number_label(overall[:length])}\"" if overall[:length].to_f > 0.0
+        parts << "Ø #{number_label(overall[:diameter])}\"" if overall[:diameter].to_f > 0.0
+        parts << "D #{number_label(overall[:depth])}\"" if overall[:depth].to_f > 0.0
+
+        radius = overall[:derived_centerline_radius].to_f
+        parts << "90° CLR #{number_label(radius)}\"" if radius > 0.0
+        parts.empty? ? "—" : parts.join(" × ")
+      rescue
+        "—"
+      end
+      private_class_method :product_envelope_text
+
+      # Use the catalog-specific rigid elbow envelope when available.
+      def elbow_bend_radius(product, dimensions, fallback)
+        return fallback.to_f unless product
+        if defined?(MasterFlowGeometry) && MasterFlowGeometry.respond_to?(:elbow_radius)
+          value = MasterFlowGeometry.elbow_radius(product, dimensions).to_f
+          return value if value > 0.0
+        end
+        fallback.to_f
+      rescue
+        fallback.to_f
       end
     end
   end
