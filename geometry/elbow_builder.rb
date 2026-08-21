@@ -5,14 +5,6 @@ module DuctExtension
       CIRCLE_SEGMENTS = 32
       EPSILON = 0.000001
 
-      # Small visual overlap collars at the tangent ends of elbows. These do not
-      # move the graph ports. They just let elbows tuck slightly into adjacent
-      # straight duct, which hides the sharp cut/blue-cap artifacts that show up
-      # on tight bends.
-      END_COLLAR_FACTOR = 0.18
-      MAX_END_COLLAR_TO_RADIUS = 0.18
-      MIN_VISIBLE_COLLAR = 0.05
-
       def self.build_into(
         group,
         start_point,
@@ -46,16 +38,33 @@ module DuctExtension
 
         radius = diameter / 2.0
 
-        # Critical improvement:
-        # Build one stable circular frame at the start, then rotate that same
-        # frame through the elbow. Do NOT recalculate the circle basis at every
-        # ring, because that can flip/twist and create pinched seams.
-        start_axis_a, start_axis_b = stable_circle_basis(
-          entry_vector,
-          arc[:normal]
-        )
+        # Round connections use one deterministic facet frame everywhere.
+        # A former visual-overlap collar used PipeBuilder's frame while the
+        # curved elbow body used a bend-normal frame. Those equal-diameter
+        # 32-gons were rotated relative to one another, producing a real
+        # crescent-shaped mismatch at pipe/elbow joins.
+        #
+        # Start in the exact PipeBuilder frame, rigidly transport it around the
+        # bend, then distribute the harmless circular-section phase correction
+        # needed to land on PipeBuilder's exact exit frame as well. The circle
+        # is rotationally symmetric, so this changes only polygon tessellation,
+        # never the physical bend, port point, radius, or routing math.
+        start_axis_a, start_axis_b = circle_basis(entry_vector)
+        desired_exit_axis_a, = circle_basis(exit_vector)
+        return false unless start_axis_a && start_axis_b && desired_exit_axis_a
 
-        return false unless start_axis_a && start_axis_b
+        end_rotation = Geom::Transformation.rotation(
+          arc[:center],
+          arc[:normal],
+          arc[:angle]
+        )
+        raw_exit_axis_a = start_axis_a.transform(end_rotation)
+        raw_exit_axis_a.normalize!
+        phase_error = signed_angle_about_axis(
+          raw_exit_axis_a,
+          desired_exit_axis_a,
+          exit_vector
+        )
 
         rings = []
         ring_centers = []
@@ -71,8 +80,20 @@ module DuctExtension
           )
 
           ring_center = start_point.transform(rotation)
+          tangent = entry_vector.transform(rotation)
+          tangent.normalize!
           axis_a = start_axis_a.transform(rotation)
           axis_b = start_axis_b.transform(rotation)
+
+          if phase_error.abs > EPSILON
+            phase_rotation = Geom::Transformation.rotation(
+              Geom::Point3d.new(0, 0, 0),
+              tangent,
+              phase_error * t
+            )
+            axis_a = axis_a.transform(phase_rotation)
+            axis_b = axis_b.transform(phase_rotation)
+          end
 
           axis_a.normalize!
           axis_b.normalize!
@@ -108,17 +129,6 @@ module DuctExtension
 
         end_point = ring_centers.last
 
-        add_tangent_overlap_collars(
-          group: group,
-          start_point: start_point,
-          end_point: end_point,
-          entry_vector: entry_vector,
-          exit_vector: exit_vector,
-          diameter: diameter,
-          bend_radius: bend_radius,
-          angle: arc[:angle]
-        )
-
         if cap_start
           Mesh.add_face_safe(
             entities,
@@ -136,14 +146,7 @@ module DuctExtension
         end
 
         soften_elbow_edges(group)
-        add_clean_end_rings(
-          group: group,
-          start_point: start_point,
-          end_point: end_point,
-          entry_vector: entry_vector,
-          exit_vector: exit_vector,
-          diameter: diameter
-        )
+        hide_connection_rings(group.entities, rings.first, rings.last)
 
         Mesh.apply_material_from_group(group)
 
@@ -213,23 +216,17 @@ module DuctExtension
         }
       end
 
-      def self.stable_circle_basis(tangent, bend_normal)
-        tangent = RectangularFrame.normalized(tangent)
-        bend_normal = RectangularFrame.normalized(bend_normal)
+      def self.signed_angle_about_axis(from_vector, to_vector, axis)
+        from = RectangularFrame.normalized(from_vector)
+        to = RectangularFrame.normalized(to_vector)
+        normal = RectangularFrame.normalized(axis)
+        return 0.0 unless from && to && normal
 
-        return nil unless tangent && bend_normal
-
-        # The bend normal is perpendicular to the tangent, so it is a very stable
-        # first ring axis. The second ring axis completes the circular frame.
-        axis_a = bend_normal.clone
-        axis_b = tangent.cross(axis_a)
-
-        return nil if axis_b.length <= EPSILON
-
-        axis_a.normalize!
-        axis_b.normalize!
-
-        [axis_a, axis_b]
+        angle = from.angle_between(to)
+        cross = from.cross(to)
+        normal.dot(cross) < 0.0 ? -angle : angle
+      rescue
+        0.0
       end
 
       def self.ring_points(center, axis_a, axis_b, radius, segments)
@@ -253,127 +250,47 @@ module DuctExtension
       end
 
       def self.circle_basis(direction)
-        direction = RectangularFrame.normalized(direction)
-        return nil unless direction
-
-        reference = RectangularFrame.best_reference_axis(direction)
-
-        axis_a = direction.cross(reference)
-        return nil if axis_a.length <= EPSILON
-
-        axis_a.normalize!
-
-        axis_b = direction.cross(axis_a)
-        return nil if axis_b.length <= EPSILON
-
-        axis_b.normalize!
-
-        [axis_a, axis_b]
-      end
-
-      def self.add_tangent_overlap_collars(
-        group:,
-        start_point:,
-        end_point:,
-        entry_vector:,
-        exit_vector:,
-        diameter:,
-        bend_radius:,
-        angle:
-      )
-        collar = elbow_collar_length(
-          diameter: diameter,
-          bend_radius: bend_radius,
-          angle: angle
-        )
-
-        return if collar <= MIN_VISIBLE_COLLAR
-
-        start_collar_start = start_point.offset(entry_vector.clone.reverse, collar)
-        end_collar_end = end_point.offset(exit_vector, collar)
-
-        PipeBuilder.build_into(
-          group,
-          start_collar_start,
-          start_point,
-          diameter,
-          overlap_start: false,
-          overlap_end: false,
-          cap_start: false,
-          cap_end: false
-        )
-
-        PipeBuilder.build_into(
-          group,
-          end_point,
-          end_collar_end,
-          diameter,
-          overlap_start: false,
-          overlap_end: false,
-          cap_start: false,
-          cap_end: false
-        )
-      rescue => error
-        puts "ElbowBuilder.add_tangent_overlap_collars failed: #{error.message}"
-      end
-
-      def self.elbow_collar_length(diameter:, bend_radius:, angle:)
-        diameter = diameter.to_f
-        bend_radius = bend_radius.to_f
-        angle = angle.to_f
-
-        base = diameter * END_COLLAR_FACTOR
-        radius_cap = bend_radius * MAX_END_COLLAR_TO_RADIUS
-
-        # Tighter and more U-shaped elbows get a little more visual overlap.
-        tightness_boost = [[angle / (Math::PI / 2.0), 1.5].min, 0.75].max
-
-        [base * tightness_boost, radius_cap].min
+        # PipeBuilder is the single authority for round connector facet phase.
+        # Elbows must use the same frame or equal-diameter 32-gons can meet at
+        # different rotations and leave visible crescent gaps.
+        PipeBuilder.circle_basis(direction)
       rescue
-        0.0
+        nil
       end
 
-      def self.add_clean_end_rings(group:, start_point:, end_point:, entry_vector:, exit_vector:, diameter:)
-        radius = diameter.to_f / 2.0
+      def self.hide_connection_rings(entities, *rings)
+        edges = entities.grep(Sketchup::Edge)
 
-        add_round_socket_ring(
-          group: group,
-          center: start_point,
-          direction: entry_vector,
-          radius: radius,
-          segments: CIRCLE_SEGMENTS
-        )
+        Array(rings).compact.each do |ring|
+          ring.length.times do |index|
+            next_index = (index + 1) % ring.length
+            point_a = ring[index]
+            point_b = ring[next_index]
 
-        add_round_socket_ring(
-          group: group,
-          center: end_point,
-          direction: exit_vector,
-          radius: radius,
-          segments: CIRCLE_SEGMENTS
-        )
-      rescue => error
-        puts "ElbowBuilder.add_clean_end_rings failed: #{error.message}"
-      end
+            edge = edges.find do |candidate|
+              edge_matches_segment?(candidate, point_a, point_b)
+            end
+            next unless edge && edge.valid?
 
-      def self.add_round_socket_ring(group:, center:, direction:, radius:, segments:)
-        axis_a, axis_b = circle_basis(direction)
-        return unless axis_a && axis_b
-
-        points = ring_points(center, axis_a, axis_b, radius, segments)
-        entities = group.entities
-
-        segments.times do |index|
-          next_index = (index + 1) % segments
-
-          edge = entities.add_line(points[index], points[next_index])
-          next unless edge
-
-          edge.hidden = false
-          edge.soft = false if edge.respond_to?(:soft=)
-          edge.smooth = false if edge.respond_to?(:smooth=)
+            edge.hidden = true
+            edge.soft = true if edge.respond_to?(:soft=)
+            edge.smooth = true if edge.respond_to?(:smooth=)
+          end
         end
       rescue => error
-        puts "ElbowBuilder.add_round_socket_ring failed: #{error.message}"
+        puts "ElbowBuilder.hide_connection_rings failed: #{error.message}"
+      end
+
+      def self.edge_matches_segment?(edge, point_a, point_b)
+        return false unless edge && edge.valid?
+
+        a = edge.start.position
+        b = edge.end.position
+        same_forward = a.distance(point_a) <= EPSILON && b.distance(point_b) <= EPSILON
+        same_reverse = a.distance(point_b) <= EPSILON && b.distance(point_a) <= EPSILON
+        same_forward || same_reverse
+      rescue
+        false
       end
 
       def self.soften_elbow_edges(group)
@@ -391,13 +308,12 @@ module DuctExtension
       end
 
       private_class_method :arc_data
-      private_class_method :stable_circle_basis
+      private_class_method :signed_angle_about_axis
       private_class_method :ring_points
-      private_class_method :add_tangent_overlap_collars
-      private_class_method :elbow_collar_length
-      private_class_method :add_clean_end_rings
-      private_class_method :add_round_socket_ring
+      private_class_method :hide_connection_rings
+      private_class_method :edge_matches_segment?
       private_class_method :soften_elbow_edges
     end
   end
 end
+

@@ -1377,16 +1377,12 @@ module DuctExtension
       end
 
       def round_basis(direction)
-        direction = normalized(direction)
-        return nil unless direction
-        reference = Geometry::RectangularFrame.best_reference_axis(direction)
-        axis_a = direction.cross(reference)
-        return nil if axis_a.length <= EPSILON
-        axis_a.normalize!
-        axis_b = direction.cross(axis_a)
-        return nil if axis_b.length <= EPSILON
-        axis_b.normalize!
-        [axis_a, axis_b]
+        # One authoritative circular facet frame for catalog and generic round
+        # geometry. Keeping this delegated to PipeBuilder prevents future
+        # same-diameter socket phase drift between fittings and straight duct.
+        Geometry::PipeBuilder.circle_basis(direction)
+      rescue
+        nil
       end
       private_class_method :round_basis
 
