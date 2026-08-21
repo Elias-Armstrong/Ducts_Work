@@ -31,7 +31,7 @@ module DuctExtension
         if Catalog::Manager.active?(Sketchup.active_model)
           products = Catalog::Manager.pipe_products(shape, Sketchup.active_model)
           if products.empty?
-            UI.messagebox("No supported Master Flow straight-duct sizes are loaded for this shape.")
+            UI.messagebox("No supported straight-duct sizes are loaded for this shape in the active catalog.")
             return nil
           end
 
@@ -41,7 +41,7 @@ module DuctExtension
             ["New Catalog Duct Product:"],
             [current_product.label],
             [labels.join("|")],
-            "Resize Selected Duct — Master Flow"
+            "Resize Selected Duct — #{Catalog::Manager.active_name(model)}"
           )
           return nil unless input
 
@@ -128,7 +128,7 @@ module DuctExtension
         catalog_piece = selected_pieces.find { |piece| Catalog::Manager.catalog_locked_piece?(piece) }
         if catalog_piece
           sku = catalog_piece.group.get_attribute(Catalog::Manager::DICTIONARY, "model_number").to_s
-          label = sku.empty? ? "catalog piece" : "Master Flow #{sku}"
+          label = sku.empty? ? "catalog piece" : "#{Catalog::Manager.active_name(model)} #{sku}"
           UI.messagebox(
             "#{label} is a stocked catalog component and its dimensions are locked.\n\n" \
             "Catalog pieces cannot be resized or reshaped in place. Add a real catalog reducer/converter and continue with a different catalog size instead."
@@ -164,7 +164,7 @@ module DuctExtension
           end
           if unsupported_piece
             UI.messagebox(
-              "Master Flow catalog mode cannot resize the selected #{unsupported_piece.type} to " +
+              "#{Catalog::Manager.active_name(model)} catalog mode cannot resize the selected #{unsupported_piece.type} to " +
               Catalog::Manager.dimensions_label(target_dimensions) +
               ". No generic replacement was created."
             )

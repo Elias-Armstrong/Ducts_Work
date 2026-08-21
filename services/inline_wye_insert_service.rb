@@ -21,7 +21,7 @@ module DuctExtension
         dims = Model::DuctDimensions.coerce(dimensions)
 
         unless Catalog::Manager.active?(model) && dims.round?
-          ::UI.messagebox("Inline Wye Saddle is currently a Master Flow round-catalog operation.")
+          ::UI.messagebox("Inline Wye Saddle is available only for supported round manufacturer-catalog products.")
           return nil
         end
 
@@ -61,7 +61,7 @@ module DuctExtension
         external_neighbors_b = external_neighbors(network, old_port_b, pipe_piece)
         old_group = pipe_piece.group
 
-        ModelOperation.run(model: model, network: network, name: "Insert Master Flow Wye Saddle") do |operation|
+        ModelOperation.run(model: model, network: network, name: "Insert #{Catalog::Manager.active_name(model)} Wye Saddle") do |operation|
           old_group.erase! if old_group && old_group.valid?
           network.remove_piece(pipe_piece)
 
@@ -80,7 +80,7 @@ module DuctExtension
           operation.abort!(nil) unless pipe_a && pipe_b
 
           group = model.active_entities.add_group
-          group.name = "Master Flow #{product.sku} — 45-Degree Wye Saddle"
+          group.name = "#{Catalog::Manager.product_catalog_name(product)} #{product.sku} — 45-Degree Wye Saddle"
           geometry = Catalog::MasterFlowGeometry.build_round_wye_saddle(
             group: group,
             center: center,
@@ -175,7 +175,7 @@ module DuctExtension
         vector.normalize!
 
         group = model.active_entities.add_group
-        group.name = "Master Flow #{catalog_product.sku} — Duct Pipe"
+        group.name = "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Duct Pipe"
         success = Catalog::MasterFlowGeometry.build_pipe(
           group: group,
           start_point: start_point,

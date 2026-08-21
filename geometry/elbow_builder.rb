@@ -316,4 +316,3 @@ module DuctExtension
     end
   end
 end
-

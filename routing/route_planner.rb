@@ -55,14 +55,19 @@ module DuctExtension
           turn_angle = start_vector.angle_between(requested_direction)
 
           if Catalog::Manager.active?(Sketchup.active_model) && fitting_mode == :elbow
-            product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
-            if product
-              # Treat a nearly straight setting as a straight run. A single
-              # adjustable round Master Flow elbow is limited to through 90°;
-              # larger reversals require another fitting/run.
-              if turn_angle <= MIN_ELBOW_ANGLE
-                fitting_mode = :straight
-              elsif !Catalog::Manager.elbow_angle_supported?(product, dimensions, turn_angle)
+            # Treat a nearly straight setting as a straight run. Otherwise select
+            # an actual stocked elbow that supports this requested angle. This is
+            # important for Imperial rectangular duct, where 45° and 90° are
+            # separate fixed products rather than one adjustable fitting.
+            if turn_angle <= MIN_ELBOW_ANGLE
+              fitting_mode = :straight
+            else
+              product = Catalog::Manager.elbow_for_angle(Sketchup.active_model, dimensions, turn_angle)
+              unless product
+                Sketchup.status_text = "#{Catalog::Manager.active_name(Sketchup.active_model)} has no loaded elbow for #{Catalog::Manager.dimensions_label(dimensions)} at #{(turn_angle * 180.0 / Math::PI).round(1)}°."
+                return []
+              end
+              unless Catalog::Manager.elbow_angle_supported?(product, dimensions, turn_angle)
                 Sketchup.status_text = Catalog::Manager.elbow_angle_status(product, dimensions, turn_angle)
                 return []
               end
@@ -337,7 +342,7 @@ module DuctExtension
           end
 
         if Catalog::Manager.active?(Sketchup.active_model)
-          product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+          product = angle ? Catalog::Manager.elbow_for_angle(Sketchup.active_model, dimensions, angle) : Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
           return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback, angle: angle) if product
         end
 

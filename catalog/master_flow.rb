@@ -26,6 +26,9 @@ module DuctExtension
         :transition_length,
         :style,
         :notes,
+        :catalog_key,
+        :catalog_name,
+        :catalog_document,
         keyword_init: true
       ) do
         def label
@@ -54,7 +57,11 @@ module DuctExtension
       module_function
 
       def product(**kwargs)
-        Product.new(**kwargs)
+        Product.new(**kwargs.merge(
+          catalog_key: KEY,
+          catalog_name: NAME,
+          catalog_document: CATALOG_DOCUMENT
+        ))
       end
 
       # ---- STRAIGHT DUCT -------------------------------------------------------

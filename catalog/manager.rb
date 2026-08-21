@@ -5,16 +5,31 @@ module DuctExtension
       ACTIVE_KEY = "active_catalog"
       BASE_KEY = :base
       MASTER_FLOW_KEY = :master_flow
+      IMPERIAL_KEY = :imperial
       TOLERANCE = 0.01
 
       module_function
+
+      def catalog_module_for(key)
+        case key.to_sym
+        when MASTER_FLOW_KEY then MasterFlow
+        when IMPERIAL_KEY then Imperial
+        else nil
+        end
+      rescue
+        nil
+      end
 
       def active_key(model = nil)
         model ||= Sketchup.active_model if defined?(Sketchup)
         return BASE_KEY unless model
 
         text = model.get_attribute(DICTIONARY, ACTIVE_KEY, BASE_KEY.to_s).to_s
-        text == MASTER_FLOW_KEY.to_s ? MASTER_FLOW_KEY : BASE_KEY
+        case text
+        when MASTER_FLOW_KEY.to_s then MASTER_FLOW_KEY
+        when IMPERIAL_KEY.to_s then IMPERIAL_KEY
+        else BASE_KEY
+        end
       rescue
         BASE_KEY
       end
@@ -23,14 +38,29 @@ module DuctExtension
         active_key(model) != BASE_KEY
       end
 
+      def active_catalog(model = nil)
+        catalog_module_for(active_key(model))
+      end
+
       def active_name(model = nil)
-        active_key(model) == MASTER_FLOW_KEY ? MasterFlow::NAME : "Base / Generic"
+        catalog = active_catalog(model)
+        catalog ? catalog::NAME : "Base / Generic"
+      rescue
+        "Base / Generic"
       end
 
       def set_active(model, key)
         return false unless model
 
-        normalized = key.to_s.downcase.include?("master") ? MASTER_FLOW_KEY : BASE_KEY
+        text = key.to_s.downcase
+        normalized =
+          if text.include?("imperial")
+            IMPERIAL_KEY
+          elsif text.include?("master")
+            MASTER_FLOW_KEY
+          else
+            BASE_KEY
+          end
         model.set_attribute(DICTIONARY, ACTIVE_KEY, normalized.to_s)
         normalized
       rescue => error
@@ -45,7 +75,7 @@ module DuctExtension
         input = ::UI.inputbox(
           ["Catalog:"],
           [current],
-          ["Base / Generic|Master Flow"],
+          ["Base / Generic|Master Flow|Imperial"],
           "Set Duct Catalog"
         )
         return nil unless input
@@ -54,10 +84,10 @@ module DuctExtension
         return nil unless key
 
         message =
-          if key == MASTER_FLOW_KEY
-            "Master Flow catalog enabled. New duct pieces will be restricted to supported Master Flow products."
-          else
+          if key == BASE_KEY
             "Catalog cleared. New pieces will use the extension's base/generic geometry and free-form sizes."
+          else
+            "#{active_name(model)} catalog enabled. New duct pieces will be restricted to supported #{active_name(model)} products."
           end
 
         Sketchup.status_text = message if defined?(Sketchup)
@@ -69,7 +99,41 @@ module DuctExtension
       end
 
       def all_products(model = nil)
-        active_key(model) == MASTER_FLOW_KEY ? MasterFlow.products : []
+        catalog = active_catalog(model)
+        catalog ? catalog.products : []
+      rescue
+        []
+      end
+
+      def product_catalog_name(product, model = nil)
+        if product && product.respond_to?(:catalog_name) && !product.catalog_name.to_s.empty?
+          product.catalog_name.to_s
+        else
+          active_name(model)
+        end
+      rescue
+        active_name(model)
+      end
+
+      def product_catalog_key(product, model = nil)
+        if product && product.respond_to?(:catalog_key) && product.catalog_key
+          product.catalog_key.to_sym
+        else
+          active_key(model)
+        end
+      rescue
+        active_key(model)
+      end
+
+      def product_catalog_document(product, model = nil)
+        if product && product.respond_to?(:catalog_document) && !product.catalog_document.to_s.empty?
+          product.catalog_document.to_s
+        else
+          catalog = active_catalog(model)
+          catalog ? catalog::CATALOG_DOCUMENT : ""
+        end
+      rescue
+        ""
       end
 
       def product_by_sku(sku, model = nil)
@@ -144,6 +208,27 @@ module DuctExtension
         products.find { |p| p.sku == saved } || products.first
       rescue
         elbow_products(dimensions, model).first
+      end
+
+      def elbow_for_angle(model, dimensions, angle)
+        products = elbow_products(dimensions, model)
+        return nil if products.empty?
+
+        preferred = preferred_elbow(model, dimensions)
+        return preferred if preferred && elbow_angle_supported?(preferred, dimensions, angle)
+
+        # When a catalog has separate fixed 45°/90° rectangular products, keep
+        # the user's preferred construction style (flat/side) where possible.
+        if preferred
+          same_style = products.find do |product|
+            product.style == preferred.style && elbow_angle_supported?(product, dimensions, angle)
+          end
+          return same_style if same_style
+        end
+
+        products.find { |product| elbow_angle_supported?(product, dimensions, angle) }
+      rescue
+        nil
       end
 
       def save_elbow_preference(model, dimensions, product)
@@ -334,9 +419,9 @@ module DuctExtension
         dims = Model::DuctDimensions.coerce(dimensions)
         degrees = angle.to_f * 180.0 / Math::PI
         if dims.round? && product && product.style == :four_gore_adjustable
-          "Master Flow #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
+          "#{product_catalog_name(product)} #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
         else
-          "Master Flow #{product && product.sku}: this catalog elbow is a fixed 90° fitting. Requested #{degrees.round(1)}°."
+          "#{product_catalog_name(product)} #{product && product.sku}: this catalog elbow is fixed at #{(product && product.angle_degrees || 90).to_f.round(1)}°. Requested #{degrees.round(1)}°."
         end
       rescue
         "Requested catalog elbow angle is not supported."
@@ -389,7 +474,7 @@ module DuctExtension
           ["Duct Shape:"],
           [current_shape.to_sym == :rectangular ? "Rectangular" : "Round"],
           ["Round|Rectangular"],
-          "Master Flow Duct Settings"
+          "#{active_name(model)} Duct Settings"
         )
         return nil unless shape_input
 
@@ -413,7 +498,7 @@ module DuctExtension
           ["Duct Product:"],
           [selected.label],
           [labels.join("|")],
-          "Master Flow Duct Product"
+          "#{active_name(model)} Duct Product"
         )
         return nil unless product_input
 
@@ -428,7 +513,7 @@ module DuctExtension
             ["Elbow Product:", "Length Increment:"],
             [elbow_label, increment_label(current_increment)],
             [elbow_label, "1/4 inch|1/2 inch|1 inch"],
-            "Master Flow Routing Product"
+            "#{active_name(model)} Routing Product"
           )
           return nil unless elbow_input
           chosen_elbow = nil
@@ -440,7 +525,7 @@ module DuctExtension
             ["Elbow Product:", "Length Increment:"],
             [preferred.label, increment_label(current_increment)],
             [elbow_labels.join("|"), "1/4 inch|1/2 inch|1 inch"],
-            "Master Flow Routing Product"
+            "#{active_name(model)} Routing Product"
           )
           return nil unless elbow_input
           chosen_elbow = elbows.find { |p| p.label == elbow_input[0].to_s } || preferred
@@ -471,7 +556,7 @@ module DuctExtension
         targets = allowed_branch_targets(main, family: family, model: model)
 
         if products.empty? || targets.empty?
-          ::UI.messagebox("Master Flow has no modeled #{family} product with an inlet matching this duct size.")
+          ::UI.messagebox("#{active_name(model)} has no modeled #{family} product with an inlet matching this duct size.")
           return nil
         end
 
@@ -508,7 +593,7 @@ module DuctExtension
         model ||= Sketchup.active_model if defined?(Sketchup)
         targets = transition_targets(source_dimensions, model)
         if targets.empty?
-          ::UI.messagebox("There is no Master Flow reducer/stack-boot in the loaded catalog that connects from this size.")
+          ::UI.messagebox("There is no #{active_name(model)} reducer/converter in the loaded catalog that connects from this size.")
           return nil
         end
 
@@ -537,8 +622,8 @@ module DuctExtension
       def apply_product_metadata(group, product, extra = {})
         return false unless group && group.valid? && product
 
-        group.set_attribute(DICTIONARY, "catalog_key", MASTER_FLOW_KEY.to_s)
-        group.set_attribute(DICTIONARY, "catalog_name", MasterFlow::NAME)
+        group.set_attribute(DICTIONARY, "catalog_key", product_catalog_key(product).to_s)
+        group.set_attribute(DICTIONARY, "catalog_name", product_catalog_name(product))
         group.set_attribute(DICTIONARY, "model_number", product.sku.to_s)
         group.set_attribute(DICTIONARY, "product_name", product.name.to_s)
         group.set_attribute(DICTIONARY, "family", product.family.to_s)
@@ -547,7 +632,7 @@ module DuctExtension
         group.set_attribute(DICTIONARY, "nominal_width", product.width.to_f) if product.width
         group.set_attribute(DICTIONARY, "nominal_height", product.height.to_f) if product.height
         group.set_attribute(DICTIONARY, "branch_diameter", product.branch_diameter.to_f) if product.branch_diameter
-        group.set_attribute(DICTIONARY, "catalog_document", MasterFlow::CATALOG_DOCUMENT)
+        group.set_attribute(DICTIONARY, "catalog_document", product_catalog_document(product))
 
         if product.overall
           product.overall.each do |key, value|
@@ -569,7 +654,7 @@ module DuctExtension
 
       def unsupported_message(family, dimensions = nil)
         detail = dimensions ? " for #{dimensions_label(dimensions)}" : ""
-        "Master Flow catalog mode has no supported #{family.to_s.tr('_', ' ')}#{detail} in the loaded catalog. No generic fitting was created."
+        "#{active_name} catalog mode has no supported #{family.to_s.tr('_', ' ')}#{detail} in the loaded catalog. No generic fitting was created."
       end
 
       def notify_unsupported(family, dimensions = nil)
@@ -690,7 +775,7 @@ module DuctExtension
 
         products = junction_products(main_dimensions, family, model)
         if products.empty?
-          ::UI.messagebox("Master Flow has no #{family} with an inlet matching #{dimensions_label(main_dimensions)}.")
+          ::UI.messagebox("#{active_name(model)} has no #{family} with an inlet matching #{dimensions_label(main_dimensions)}.")
           return nil
         end
 
@@ -797,8 +882,8 @@ module DuctExtension
 
         if defined?(::UI::HtmlDialog)
           dialog = ::UI::HtmlDialog.new(
-            dialog_title: "Master Flow Catalog — Supported Simple Duct Products",
-            preferences_key: "SimpleDuctMasterFlowCatalogBrowser",
+            dialog_title: "#{active_name(model)} Catalog — Supported Simple Duct Products",
+            preferences_key: "SimpleDuctCatalogBrowser",
             scrollable: true,
             resizable: true,
             width: 900,
@@ -875,7 +960,7 @@ module DuctExtension
           "#{family.to_s.upcase}:\n  " + groups[family].map(&:sku).join(", ")
         end.join("\n\n")
       rescue
-        "Master Flow catalog"
+        "#{active_name(model)} catalog"
       end
       private_class_method :catalog_plain_text
 
@@ -1018,14 +1103,14 @@ module DuctExtension
           ["Duct Shape:"],
           [current_shape.to_sym == :rectangular ? "Rectangular" : "Round"],
           ["Round|Rectangular"],
-          "Master Flow Duct Settings"
+          "#{active_name(model)} Duct Settings"
         )
         return nil unless shape_input
 
         shape = shape_input[0].to_s.downcase.start_with?("rect") ? :rectangular : :round
         products = pipe_products(shape, model)
         if products.empty?
-          ::UI.messagebox("No Master Flow #{shape} straight-duct product exists in the loaded catalog.")
+          ::UI.messagebox("No #{active_name(model)} #{shape} straight-duct product exists in the loaded catalog.")
           return nil
         end
 
@@ -1044,7 +1129,7 @@ module DuctExtension
           ["Duct Product:"],
           [default_label],
           [labels.join("|")],
-          "Master Flow Duct Product"
+          "#{active_name(model)} Duct Product"
         )
         return nil unless product_input
 
@@ -1057,7 +1142,7 @@ module DuctExtension
         if elbows.empty?
           availability = size_availability_text(dimensions, model)
           warning =
-            "#{selected.sku} is a real Master Flow straight-duct product, but RESMF164 lists no matching elbow for #{dimensions_label(dimensions)}.\n\n" \
+            "#{selected.sku} is a real #{active_name(model)} straight-duct product, but the loaded catalog lists no matching elbow for #{dimensions_label(dimensions)}.\n\n" \
             "In strict catalog mode this size can continue straight and can use only the compatible products listed below; Simple Duct will not invent a generic elbow.\n\n" \
             "#{availability}\n\nContinue with this straight-only size?"
           answer = ::UI.messagebox(warning, MB_YESNO)
@@ -1068,7 +1153,7 @@ module DuctExtension
             ["Elbow Product:", "Length Increment:"],
             [elbow_label, increment_label(current_increment)],
             [elbow_label, "1/4 inch|1/2 inch|1 inch"],
-            "Master Flow Routing Product"
+            "#{active_name(model)} Routing Product"
           )
           return nil unless elbow_input
           chosen_elbow = nil
@@ -1080,7 +1165,7 @@ module DuctExtension
             ["Elbow Product:", "Length Increment:"],
             [preferred.label, increment_label(current_increment)],
             [elbow_labels.join("|"), "1/4 inch|1/2 inch|1 inch"],
-            "Master Flow Routing Product"
+            "#{active_name(model)} Routing Product"
           )
           return nil unless elbow_input
           chosen_elbow = elbows.find { |product| product.label == elbow_input[0].to_s } || preferred
@@ -1287,9 +1372,9 @@ module DuctExtension
         dims = Model::DuctDimensions.coerce(dimensions)
         degrees = angle.to_f * 180.0 / Math::PI
         if dims.round? && product && product.style == :four_gore_adjustable
-          "Master Flow #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
+          "#{product_catalog_name(product)} #{product.sku}: adjustable round elbows support modeled turns through 90°; nearly straight directions use straight duct. Requested #{degrees.round(1)}°."
         else
-          "Master Flow #{product && product.sku}: this catalog elbow is a fixed 90° fitting. Requested #{degrees.round(1)}°."
+          "#{product_catalog_name(product)} #{product && product.sku}: this catalog elbow is fixed at #{(product && product.angle_degrees || 90).to_f.round(1)}°. Requested #{degrees.round(1)}°."
         end
       rescue
         "Requested catalog elbow angle is not supported."
@@ -1309,7 +1394,13 @@ module DuctExtension
         dims = Model::DuctDimensions.coerce(dimensions)
         return [] unless dims.round?
         all_products(model).select do |product|
-          product.family == :tee_saddle && close?(product.diameter, dims.diameter)
+          product.family == :tee_saddle &&
+            (product.style == :tee_saddle_equal_or_larger ?
+              dims.diameter.to_f + 0.001 >= product.diameter.to_f :
+              close?(product.diameter, dims.diameter))
+        end.sort_by do |product|
+          exact = close?(product.diameter, dims.diameter) ? 0 : 1
+          [exact, -product.diameter.to_f]
         end
       rescue
         []
@@ -1327,6 +1418,9 @@ module DuctExtension
         return [] unless dims.round?
         all_products(model).select do |product|
           product.family == :wye_saddle && dims.diameter.to_f + 0.001 >= product.diameter.to_f
+        end.sort_by do |product|
+          exact = close?(product.diameter, dims.diameter) ? 0 : 1
+          [exact, -product.diameter.to_f]
         end
       rescue
         []
@@ -1437,7 +1531,9 @@ module DuctExtension
               )
             end
           when :tee_saddle
-            dims.round? && close?(product.diameter, dims.diameter)
+            dims.round? && (product.style == :tee_saddle_equal_or_larger ?
+              dims.diameter.to_f + 0.001 >= product.diameter.to_f :
+              close?(product.diameter, dims.diameter))
           when :wye_saddle
             dims.round? && dims.diameter.to_f + 0.001 >= product.diameter.to_f
           when :register_box, :register_box_saddle

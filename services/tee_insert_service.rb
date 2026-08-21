@@ -214,7 +214,7 @@ module DuctExtension
         tee_group = model.active_entities.add_group
         tee_group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Tee Saddle"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Tee Saddle"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Tee"
           else
@@ -367,7 +367,7 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Duct Pipe"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Duct Pipe"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
           else

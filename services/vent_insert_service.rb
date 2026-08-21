@@ -162,7 +162,7 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Duct Cap"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Duct Cap"
           elsif dimensions[:shape] == :rectangular
             "Rectangular End Vent Cover"
           else
@@ -254,7 +254,7 @@ module DuctExtension
         return nil unless catalog_product && catalog_product.family == :fresh_air_vent
 
         group = model.active_entities.add_group
-        group.name = "Master Flow #{catalog_product.sku} — Fresh Air Vent"
+        group.name = "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Fresh Air Vent"
         outward_axis = end_port.vector.clone
         outward_axis.normalize!
 
@@ -290,7 +290,7 @@ module DuctExtension
         return nil unless catalog_product && catalog_product.family == :wall_vent
 
         group = model.active_entities.add_group
-        group.name = "Master Flow #{catalog_product.sku} — Appliance Wall Vent"
+        group.name = "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Appliance Wall Vent"
         outward_axis = end_port.vector.clone
         outward_axis.normalize!
 
@@ -327,7 +327,7 @@ module DuctExtension
         return nil unless dimensions[:shape] == :round
 
         group = model.active_entities.add_group
-        group.name = "Master Flow #{catalog_product.sku} — Register Box"
+        group.name = "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Register Box"
         outward_axis = end_port.vector.clone
         outward_axis.normalize!
 
@@ -564,7 +564,7 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Register Box Saddle"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Register Box Saddle"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Side Register Vent"
           else

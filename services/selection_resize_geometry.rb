@@ -140,7 +140,7 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Auto Transition"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Auto Transition"
           elsif selected_dimensions[:shape] == :rectangular
             "Auto Rectangular Duct Increaser / Reducer"
           else

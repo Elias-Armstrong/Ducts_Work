@@ -16,7 +16,7 @@ module DuctExtension
           if Catalog::Manager.active?(Sketchup.active_model)
             selection = Catalog::Manager.prompt_transition_target(
               dimensions,
-              title: "Master Flow Increaser / Reducer",
+              title: "#{Catalog::Manager.active_name(@model)} Increaser / Reducer",
               model: Sketchup.active_model
             )
             return nil unless selection

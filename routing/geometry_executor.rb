@@ -127,7 +127,7 @@ module DuctExtension
           if catalog_product
             # One modeled run remains one clean selectable object regardless of
             # length. Package-length variants are not represented in geometry.
-            "Master Flow #{catalog_product.sku} — Duct Pipe"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Duct Pipe"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
           else
@@ -268,6 +268,10 @@ module DuctExtension
         return nil unless start_point && entry_vector && exit_vector
 
         elbow_angle = entry_vector.angle_between(exit_vector)
+        if Catalog::Manager.active?(@model)
+          catalog_product = Catalog::Manager.elbow_for_angle(@model, dimensions, elbow_angle)
+          return Catalog::Manager.notify_unsupported(:elbow, dimensions) unless catalog_product
+        end
         if catalog_product && !Catalog::Manager.elbow_angle_supported?(catalog_product, dimensions, elbow_angle)
           Sketchup.status_text = Catalog::Manager.elbow_angle_status(catalog_product, dimensions, elbow_angle)
           return nil
@@ -294,7 +298,7 @@ module DuctExtension
         group = @model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — Rigid Catalog Elbow"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Rigid Catalog Elbow"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Elbow"
           else
@@ -498,7 +502,7 @@ module DuctExtension
           step[:preferred_height_axis] || frame_source_height_axis(frame_source)
 
         group = @model.active_entities.add_group
-        group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : reducer_group_name(start_dimensions, end_dimensions)
+        group.name = catalog_product ? "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Transition" : reducer_group_name(start_dimensions, end_dimensions)
 
         success =
           if catalog_product

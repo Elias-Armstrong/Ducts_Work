@@ -40,7 +40,9 @@ require_relative 'model/network'
 
 # ===== CATALOGS =====
 require_relative 'catalog/master_flow'
+require_relative 'catalog/imperial'
 require_relative 'catalog/manager'
+require_relative 'catalog/multi_catalog'
 
 # ===== GEOMETRY =====
 require_relative 'geometry/primitive_helpers'

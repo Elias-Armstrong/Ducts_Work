@@ -104,7 +104,7 @@ module DuctExtension
         def self.bend_radius_for(dimensions, angle: nil)
           fallback = Model::DuctDimensions.coerce(dimensions).largest * DEFAULT_BEND_RADIUS_FACTOR
           if Catalog::Manager.active?(Sketchup.active_model)
-            product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+            product = angle ? Catalog::Manager.elbow_for_angle(Sketchup.active_model, dimensions, angle) : Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
             return Catalog::Manager.elbow_bend_radius(product, dimensions, fallback, angle: angle) if product
           end
           fallback
@@ -114,7 +114,7 @@ module DuctExtension
           return false unless angle > 0.01 && angle < Math::PI - 0.01
           return true unless dimensions && Catalog::Manager.active?(Sketchup.active_model)
 
-          product = Catalog::Manager.preferred_elbow(Sketchup.active_model, dimensions)
+          product = Catalog::Manager.elbow_for_angle(Sketchup.active_model, dimensions, angle)
           return false unless product
           Catalog::Manager.elbow_angle_supported?(product, dimensions, angle)
         rescue

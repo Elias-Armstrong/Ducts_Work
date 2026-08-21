@@ -569,7 +569,7 @@ module DuctExtension
         dimensions = Model::Port.dimensions_from_params({}, pipe_piece.ports[0])
         adopt_catalog_target_dimensions!(pipe_piece.ports[0])
         unless dimensions[:shape] == :round
-          ::UI.messagebox("Master Flow 45YS4 is a round-pipe saddle. Click an existing round duct pipe.")
+          ::UI.messagebox("The selected catalog wye saddle is a round-pipe fitting. Click an existing round duct pipe.")
           return
         end
 
@@ -578,7 +578,7 @@ module DuctExtension
           ["45-degree branch lean:"],
           ["Along pipe direction"],
           ["Along pipe direction|Against pipe direction"],
-          "Master Flow 45YS4 Wye Saddle"
+          "#{Catalog::Manager.active_name(Sketchup.active_model)} Wye Saddle"
         )
         return unless lean
         forward_sign = lean[0].to_s == "Against pipe direction" ? -1.0 : 1.0
@@ -682,7 +682,7 @@ module DuctExtension
         @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
 
         Sketchup.status_text =
-          "Inserted Master Flow #{product.sku} automatically. Click the next point to continue with #{Catalog::Manager.dimensions_label(target_dimensions)} duct."
+          "Inserted #{Catalog::Manager.product_catalog_name(product)} #{product.sku} automatically. Click the next point to continue with #{Catalog::Manager.dimensions_label(target_dimensions)} duct."
         :inserted
       rescue => error
         puts "DuctTool.auto_catalog_transition_from_start_port! failed: #{error.message}"
@@ -854,4 +854,3 @@ module DuctExtension
     end
   end
 end
-

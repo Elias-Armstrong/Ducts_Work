@@ -79,7 +79,7 @@ module DuctExtension
           group = model.active_entities.add_group
           group.name =
             if catalog_product
-              "Master Flow #{catalog_product.sku} — End Wye"
+              "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — End Wye"
             elsif mixed_side_takeoff
               "Rectangular to Round Side Takeoff"
             elsif main_dimensions[:shape] == :rectangular
@@ -235,7 +235,7 @@ module DuctExtension
         product = Catalog::Manager.prompt_junction_product(
           main_dimensions: main_dimensions,
           family: :wye,
-          title: "Master Flow Wye",
+          title: "#{Catalog::Manager.active_name(model)} Wye",
           model: model
         )
         return nil unless product
@@ -266,10 +266,10 @@ module DuctExtension
         ModelOperation.run(
           model: model,
           network: network,
-          name: "Insert Master Flow Wye"
+          name: "Insert #{Catalog::Manager.active_name(model)} Wye"
         ) do |operation|
           group = model.active_entities.add_group
-          group.name = "Master Flow #{product.sku} — Wye"
+          group.name = "#{Catalog::Manager.product_catalog_name(product)} #{product.sku} — Wye"
 
           success = Catalog::MasterFlowGeometry.build_round_wye(
             group: group,

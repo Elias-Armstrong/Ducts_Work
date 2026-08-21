@@ -99,7 +99,7 @@ module DuctExtension
         group = model.active_entities.add_group
         group.name =
           if catalog_product
-            "Master Flow #{catalog_product.sku} — End Tee"
+            "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — End Tee"
           elsif dimensions[:shape] == :rectangular
             "Rectangular End Tee"
           else
@@ -129,7 +129,8 @@ module DuctExtension
                 branch_vector: stem_into_tee,
                 diameter: dimensions[:diameter],
                 main_depth: main_socket_depth,
-                branch_depth: branch_socket_depth
+                branch_depth: branch_socket_depth,
+                product: catalog_product
               )
             else
               Geometry::TeeBuilder.build_into(

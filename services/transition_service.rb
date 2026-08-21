@@ -162,7 +162,7 @@ module DuctExtension
           preferred_height_axis
 
         group = model.active_entities.add_group
-        group.name = catalog_product ? "Master Flow #{catalog_product.sku} — Transition" : transition_group_name(source_dimensions, target_dimensions)
+        group.name = catalog_product ? "#{Catalog::Manager.product_catalog_name(catalog_product)} #{catalog_product.sku} — Transition" : transition_group_name(source_dimensions, target_dimensions)
 
         success =
           if catalog_product

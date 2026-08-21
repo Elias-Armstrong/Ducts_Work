@@ -10,7 +10,7 @@ module DuctExtension
     def browse_catalog
       model = Sketchup.active_model
       unless Catalog::Manager.active?(model)
-        ::UI.messagebox("Base / Generic mode is active. Choose Master Flow from Set Catalog... first.")
+        ::UI.messagebox("Base / Generic mode is active. Choose a manufacturer from Set Catalog... first.")
         return false
       end
 
@@ -35,7 +35,7 @@ module DuctExtension
     def choose_catalog_products
       model = Sketchup.active_model
       unless Catalog::Manager.active?(model)
-        ::UI.messagebox("Choose Master Flow from Set Catalog... before selecting stocked products.")
+        ::UI.messagebox("Choose a manufacturer catalog from Set Catalog... before selecting stocked products.")
         return false
       end
 
@@ -111,7 +111,7 @@ module DuctExtension
 
       browse_command = UI::Command.new("Browse Catalog") { UIActions.browse_catalog }
       browse_command.tooltip = "Browse Catalog"
-      browse_command.status_bar_text = "Show Master Flow buildability by duct size and the supported stocked products."
+      browse_command.status_bar_text = "Show active-catalog buildability by duct size and supported stocked products."
 
       resize_command = UI::Command.new("Resize Selected Duct Pieces") { UIActions.resize_selection }
       resize_command.tooltip = "Resize Selected Duct Pieces"

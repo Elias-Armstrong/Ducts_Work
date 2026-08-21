@@ -212,7 +212,20 @@ module DuctExtension
         nil
       end
 
-      def build_round_tee(group:, center:, main_vector:, branch_vector:, diameter:, main_depth:, branch_depth:)
+      def build_round_tee(group:, center:, main_vector:, branch_vector:, diameter:, main_depth:, branch_depth:, product: nil)
+        if product && product.respond_to?(:catalog_key) && product.catalog_key == :imperial
+          return build_imperial_round_tee(
+            group: group,
+            center: center,
+            main_vector: main_vector,
+            branch_vector: branch_vector,
+            diameter: diameter,
+            main_depth: main_depth,
+            branch_depth: branch_depth,
+            product: product
+          )
+        end
+
         main = normalized(main_vector)
         branch = normalized(branch_vector)
         return false unless main && branch
@@ -224,7 +237,7 @@ module DuctExtension
         branch_end = center.offset(branch, branch_depth.to_f)
 
         # Master Flow's stocked tee is a straight barrel with a fabricated
-        # perpendicular saddle.  Keep the main completely straight and flare the
+        # perpendicular saddle. Keep the main completely straight and flare the
         # branch only at the intersection instead of using the generic rounded
         # tee hub.
         Geometry::PipeBuilder.build_into(
@@ -274,6 +287,66 @@ module DuctExtension
         puts error.backtrace.join("\n") if error.backtrace
         false
       end
+
+      # Imperial's full-flow tee family is visually closer to its wye family
+      # than to the Master Flow straight-barrel tee: it is still a straight main
+      # barrel, but the side outlet is a fabricated fish-mouth branch rather than
+      # a simple round frustum pushed through the run. Keep the main straight,
+      # then cut the side branch directly to that cylindrical shell so the
+      # result reads like the catalog photo instead of a bulbous add-tee.
+      def build_imperial_round_tee(group:, center:, main_vector:, branch_vector:, diameter:, main_depth:, branch_depth:, product: nil)
+        main = normalized(main_vector)
+        branch = Geometry::VectorMath.perpendicularized(branch_vector, main)
+        return false unless main && branch
+        branch.normalize!
+
+        diameter = diameter.to_f
+        radius = diameter / 2.0
+        left = center.offset(main.clone.reverse, main_depth.to_f)
+        right = center.offset(main, main_depth.to_f)
+        branch_end = center.offset(branch, branch_depth.to_f)
+
+        Geometry::PipeBuilder.build_into(
+          group, left, right, diameter,
+          overlap_start: false, overlap_end: false,
+          cap_start: false, cap_end: false
+        )
+
+        saddle = build_round_saddle_branch(
+          entities: group.entities,
+          junction: center,
+          branch_end: branch_end,
+          main_axis: main,
+          main_radius: radius,
+          branch_axis: branch,
+          branch_radius: radius
+        )
+        return false unless saddle
+        neck_end = saddle[:neck_center]
+
+        finish_fabricated_round_fitting!(group)
+        add_round_ring(group.entities, left, main, radius)
+        add_round_ring(group.entities, right, main, radius)
+        add_round_ring(group.entities, branch_end, branch, radius)
+
+        bead = catalog_bead_offset(diameter)
+        add_round_bead(group.entities, left.offset(main, bead), main, radius)
+        add_round_bead(group.entities, right.offset(main.clone.reverse, bead), main, radius)
+        add_round_bead(group.entities, branch_end.offset(branch.clone.reverse, bead), branch, radius)
+
+        add_round_seam(group.entities, left, right, main, radius)
+        add_round_seam(group.entities, neck_end, branch_end, branch, radius) if neck_end && neck_end.distance(branch_end) > EPSILON
+        reveal_polyline_ring(group.entities, saddle[:saddle_ring])
+        add_crimp_marks(group.entities, right, main, radius, diameter)
+        add_crimp_marks(group.entities, branch_end, branch, radius, diameter)
+        Geometry::Mesh.apply_material_from_group(group)
+        true
+      rescue => error
+        puts "MasterFlowGeometry.build_imperial_round_tee failed: #{error.message}"
+        puts error.backtrace.join("\n") if error.backtrace
+        false
+      end
+      private_class_method :build_imperial_round_tee
 
       # Build only the branch saddle for an inline tee takeoff. The existing
       # main run is intentionally not replaced by a full-flow tee body.
@@ -592,6 +665,15 @@ module DuctExtension
       # branch is tucked beside the forward half of that barrel rather than
       # projecting beyond it like a generic symmetric Y.
       def wye_layout(stem_point:, forward_vector:, side_axis:, product:)
+        if product && product.respond_to?(:catalog_key) && product.catalog_key == :imperial
+          return imperial_wye_layout(
+            stem_point: stem_point,
+            forward_vector: forward_vector,
+            side_axis: side_axis,
+            product: product
+          )
+        end
+
         forward = normalized(forward_vector)
         side = Geometry::VectorMath.perpendicularized(side_axis, forward)
         return nil unless forward && side && product
@@ -658,6 +740,67 @@ module DuctExtension
         puts "MasterFlowGeometry.wye_layout failed: #{error.message}"
         nil
       end
+
+      # Imperial full-flow wyes use a slightly tighter lateral envelope than the
+      # shared Master Flow fallback. This keeps the branch tucked into the main
+      # barrel like the Imperial catalog photo while retaining the same 45-degree
+      # fabricated fish-mouth construction.
+      def imperial_wye_layout(stem_point:, forward_vector:, side_axis:, product:)
+        forward = normalized(forward_vector)
+        side = Geometry::VectorMath.perpendicularized(side_axis, forward)
+        return nil unless forward && side && product
+        side.normalize!
+
+        angle = (product.angle_degrees || 45.0).to_f * Math::PI / 180.0
+        sin_angle = Math.sin(angle).abs
+        cos_angle = Math.cos(angle).abs
+        return nil if sin_angle <= EPSILON
+
+        branch = vector_sum(
+          scaled_vector(forward, Math.cos(angle)),
+          scaled_vector(side, Math.sin(angle))
+        )
+        branch = normalized(branch)
+        return nil unless branch
+
+        inlet = product.diameter.to_f
+        outlet = (product.outlet_diameter || product.branch_diameter || inlet).to_f
+        inlet_radius = inlet / 2.0
+        outlet_radius = outlet / 2.0
+
+        main_span = [inlet * 2.45, outlet * 2.45].max
+        lateral_span = [inlet * 1.65, outlet * 1.65].max
+        lateral_span = [lateral_span, inlet_radius + outlet_radius * 1.55].max
+
+        branch_center_side = lateral_span - inlet_radius - outlet_radius * cos_angle
+        branch_center_side = [branch_center_side, outlet * 0.68].max
+        branch_reach = branch_center_side / sin_angle
+
+        branch_center_forward = main_span - outlet_radius * sin_angle
+        branch_forward_component = branch_reach * cos_angle
+        junction_distance = branch_center_forward - branch_forward_component
+        min_junction = [inlet * 0.62, outlet * 0.62].max
+        max_junction = main_span - [outlet * 0.95, inlet * 0.55].max
+        junction_distance = [[junction_distance, min_junction].max, max_junction].min
+
+        forward_socket = stem_point.offset(forward, main_span)
+        junction = stem_point.offset(forward, junction_distance)
+        branch_socket = junction.offset(branch, branch_reach)
+
+        {
+          stem_socket: stem_point,
+          forward_socket: forward_socket,
+          junction: junction,
+          branch_socket: branch_socket,
+          branch_axis: branch,
+          main_span: main_span,
+          lateral_span: lateral_span
+        }
+      rescue => error
+        puts "MasterFlowGeometry.imperial_wye_layout failed: #{error.message}"
+        nil
+      end
+      private_class_method :imperial_wye_layout
 
       def build_round_wye(group:, layout:, product:)
         return false unless group && group.valid? && layout && product
@@ -999,8 +1142,16 @@ module DuctExtension
 
       def build_rectangular_elbow(group:, start_point:, entry:, exitv:, dimensions:, product:, preferred_width_axis:, preferred_height_axis:)
         radius = elbow_radius(product, dimensions)
-        end_point = start_point.offset(entry, radius).offset(exitv, radius)
-        turn = start_point.offset(entry, radius)
+        angle = entry.angle_between(exitv)
+        # The route planner uses the tangent points of a radius-R circular turn.
+        # A fabricated miter with its virtual corner at the intersection of those
+        # tangents must therefore use R*tan(theta/2) on each leg. This is R for
+        # 90-degree elbows and keeps Imperial fixed 45-degree elbows perfectly
+        # aligned with the same planned endpoint math.
+        tangent_leg = radius * Math.tan(angle / 2.0)
+        return nil unless tangent_leg > EPSILON
+        turn = start_point.offset(entry, tangent_leg)
+        end_point = turn.offset(exitv, tangent_leg)
 
         start_basis = Geometry::RectangularFrame.stable_basis_for_axis(
           entry,
@@ -1024,6 +1175,8 @@ module DuctExtension
         return nil unless end_basis
 
         miter = [[dimensions.largest * 0.42, radius * 0.42].min, dimensions.largest * 0.18].max
+        miter = [miter, tangent_leg * 0.80].min
+        miter = [miter, tangent_leg * 0.15].max
         before = turn.offset(entry.clone.reverse, miter)
         after = turn.offset(exitv, miter)
 
@@ -1303,8 +1456,13 @@ module DuctExtension
           return value <= MAX_ADJUSTABLE_ELBOW_ANGLE + ELBOW_ANGLE_TOLERANCE
         end
 
-        # Loaded rectangular stack elbows are fixed 90-degree products.
-        (value - Math::PI / 2.0).abs <= ELBOW_ANGLE_TOLERANCE
+        # Rectangular catalog elbows are rigid products. Some catalogs (such as
+        # Imperial) stock both 45-degree and 90-degree flat/side elbows, so match
+        # the requested turn to the product's published fixed angle.
+        target_degrees = product && product.angle_degrees.to_f
+        target_degrees = 90.0 unless target_degrees > EPSILON
+        target_angle = target_degrees * Math::PI / 180.0
+        (value - target_angle).abs <= ELBOW_ANGLE_TOLERANCE
       rescue
         false
       end
