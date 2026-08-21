@@ -300,6 +300,43 @@ module DuctExtension
         end
       end
 
+
+      # Finish the current run without ending the DuctTool. The previous open
+      # port remains in the semantic network and can be snapped to later; the
+      # next left click starts a completely new run wherever the user clicks.
+      def start_new_disconnected_run(view = nil)
+        cancel_connector_swing_drag(view) if @connector_swing_session
+
+        @last_port = nil
+        @start_point = nil
+        @orthogonal_axis_lock = nil
+        reset_typed_length
+
+        # Leaving a component-placement mode would make the next click insert a
+        # fitting instead of starting the requested new run. Return to the normal
+        # routing mode while respecting catalog sizes that have no elbow.
+        unless [:elbow, :straight].include?(@fitting_mode)
+          if Catalog::Manager.active?(Sketchup.active_model)
+            dims = {
+              shape: @duct_shape,
+              diameter: @current_diameter,
+              width: @current_width,
+              height: @current_height
+            }
+            @fitting_mode = Catalog::Manager.elbow_products(dims, Sketchup.active_model).empty? ? :straight : :elbow
+          else
+            @fitting_mode = :elbow
+          end
+        end
+
+        Sketchup.status_text = "New run: click anywhere to start a disconnected duct run. Press N again anytime to break the current run."
+        view.invalidate if view
+        true
+      rescue => error
+        puts "DuctTool.start_new_disconnected_run failed: #{error.message}"
+        false
+      end
+
       def copy_dimensions_from_port(port)
         return unless port
 
@@ -399,10 +436,10 @@ module DuctExtension
 
         if @duct_shape == :rectangular
           Sketchup.status_text =
-            "Rectangular orthogonal duct: #{@current_width}\" x #{@current_height}\". #{mode_text}; #{increment_text} rounded.#{lock_suffix}#{typed_suffix}"
+            "Rectangular orthogonal duct: #{@current_width}\" x #{@current_height}\". #{mode_text}; #{increment_text} rounded.#{lock_suffix}#{typed_suffix} N = new run."
         else
           Sketchup.status_text =
-            "Round orthogonal duct: #{@current_diameter}\" diameter. #{mode_text}; #{increment_text} rounded.#{lock_suffix}#{typed_suffix}"
+            "Round orthogonal duct: #{@current_diameter}\" diameter. #{mode_text}; #{increment_text} rounded.#{lock_suffix}#{typed_suffix} N = new run."
         end
       end
     end

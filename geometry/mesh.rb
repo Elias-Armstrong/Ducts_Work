@@ -2,8 +2,9 @@ module DuctExtension
   module Geometry
     module Mesh
       EPSILON = 0.000001
+      QUAD_PLANAR_TOLERANCE = 0.00001
 
-      def self.add_face_safe(entities, points, reverse_if_normal_against: nil)
+      def self.add_face_safe(entities, points, reverse_if_normal_against: nil, log_errors: true)
         clean_points = sanitize_face_points(points)
         return nil if clean_points.length < 3
         return nil if duplicate_face_point?(clean_points)
@@ -21,7 +22,7 @@ module DuctExtension
 
         face
       rescue => error
-        puts "Mesh.add_face_safe failed: #{error.message}"
+        puts "Mesh.add_face_safe failed: #{error.message}" if log_errors
         nil
       end
 
@@ -55,13 +56,42 @@ module DuctExtension
       end
 
       def self.add_quad(entities, p1, p2, p3, p4)
-        face = add_face_safe(entities, [p1, p2, p3, p4])
+        points = sanitize_face_points([p1, p2, p3, p4])
+        return nil unless points.length == 4
+        return nil if duplicate_face_point?(points)
 
-        unless face
-          # SketchUp can reject slightly non-planar quads. Fall back to two triangles.
-          add_face_safe(entities, [p1, p2, p3])
-          add_face_safe(entities, [p1, p3, p4])
+        # Curved round surfaces are built between neighboring polygon rings.
+        # Their four corner points are often mathematically non-planar, so
+        # asking SketchUp to add them as a quad first generates an exception
+        # for every panel before the old fallback can run.  Avoid that hot
+        # exception path: only try a quad when the points are planar enough.
+        if quad_planar?(points)
+          face = add_face_safe(entities, points, log_errors: false)
+          return face if face
         end
+
+        # Triangles are always planar. This is the intended representation for
+        # a ruled panel that twists between two circular rings. Round builders
+        # soft/smooth these edges afterward, so the diagonal is not visible.
+        first = add_face_safe(entities, [points[0], points[1], points[2]])
+        second = add_face_safe(entities, [points[0], points[2], points[3]])
+        first || second
+      end
+
+      def self.quad_planar?(points, tolerance: QUAD_PLANAR_TOLERANCE)
+        return false unless points && points.length == 4
+
+        origin = points[0]
+        edge_a = origin.vector_to(points[1])
+        edge_b = origin.vector_to(points[2])
+        normal = edge_a.cross(edge_b)
+        return false if normal.length <= EPSILON
+
+        normal.normalize!
+        distance = origin.vector_to(points[3]).dot(normal).abs
+        distance <= tolerance.to_f
+      rescue
+        false
       end
 
       def self.soft_smooth_edges(group)
@@ -115,3 +145,4 @@ module DuctExtension
     end
   end
 end
+

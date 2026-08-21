@@ -95,21 +95,9 @@ module DuctExtension
         preferred_width_axis = frame_source_width_axis(frame_source)
         preferred_height_axis = frame_source_height_axis(frame_source)
 
-        # For modeling, keep a catalog straight run as ONE semantic/network
-        # piece regardless of its length. The selected SKU still supplies its
-        # catalog stock length for quantity/takeoff metadata, but the visible run
-        # does not draw artificial stock-section joints. Metadata records
-        # the physical stock quantity so the model does not imply that (for
-        # example) a 130-inch CP6X60 is a single purchasable 130-inch pipe.
-        stock_length = catalog_product && catalog_product.stock_length.to_f
-        total_length = start_point.distance(end_point)
-        stock_piece_count =
-          if catalog_product && stock_length > 0.0
-            [(total_length / stock_length).ceil, 1].max
-          elsif catalog_product
-            1
-          end
-
+        # One requested straight run is one semantic and visual piece. Catalog
+        # package lengths are not part of the modeling abstraction: no segmentation
+        # and no virtual joints.
         build_pipe_piece(
           start_point: start_point,
           end_point: end_point,
@@ -117,9 +105,7 @@ module DuctExtension
           catalog_product: catalog_product,
           source_port: source_port,
           preferred_width_axis: preferred_width_axis,
-          preferred_height_axis: preferred_height_axis,
-          stock_piece_index: nil,
-          stock_piece_count: stock_piece_count
+          preferred_height_axis: preferred_height_axis
         )
       end
 
@@ -130,9 +116,7 @@ module DuctExtension
         catalog_product:,
         source_port:,
         preferred_width_axis:,
-        preferred_height_axis:,
-        stock_piece_index: nil,
-        stock_piece_count: nil
+        preferred_height_axis:
       )
         vector = start_point.vector_to(end_point)
         return nil if vector.length == 0
@@ -142,8 +126,7 @@ module DuctExtension
         group.name =
           if catalog_product
             # One modeled run remains one clean selectable object regardless of
-            # the catalog's purchasable stock length. Physical stock quantity is
-            # retained only in metadata, not exposed as fake modeled sections.
+            # length. Package-length variants are not represented in geometry.
             "Master Flow #{catalog_product.sku} — Duct Pipe"
           elsif dimensions[:shape] == :rectangular
             "Rectangular Duct Pipe"
@@ -244,10 +227,8 @@ module DuctExtension
           Catalog::Manager.tag_piece(
             piece,
             catalog_product,
-            "modeled_cut_length" => start_point.distance(end_point),
-            "stock_piece_index" => stock_piece_index,
-            "stock_piece_count" => stock_piece_count,
-            "catalog_representation" => (stock_piece_count.to_i > 1 ? "continuous_run_assembly" : "single_stock_or_cut_piece")
+            "modeled_run_length" => start_point.distance(end_point),
+            "catalog_representation" => "continuous_model_run"
           )
         end
 

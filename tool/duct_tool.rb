@@ -14,6 +14,9 @@ module DuctExtension
     KEY_BACK   = defined?(VK_BACK)   ? VK_BACK   : 8
     KEY_DELETE = defined?(VK_DELETE) ? VK_DELETE : 46
     KEY_ESCAPE = defined?(VK_ESCAPE) ? VK_ESCAPE : 27
+    # N is not assigned in SketchUp's current default shortcut table. While this
+    # Ruby tool is active it means "start a new disconnected run".
+    KEY_NEW_RUN = 78
 
     PREVIEW_ROUND_SEGMENTS = 16
     PREVIEW_MIN_LENGTH = 0.001
@@ -267,6 +270,9 @@ module DuctExtension
 
       def onKeyDown(key, repeat, flags, view)
         case key
+        when KEY_NEW_RUN
+          start_new_disconnected_run(view)
+          return
         when KEY_UP
           toggle_orthogonal_axis_lock(:positive_z)
           update_status_for_current_shape
@@ -457,6 +463,21 @@ module DuctExtension
           @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
         else
           if snapped_port
+            # In catalog mode, the currently selected duct product is the desired
+            # size of the NEW run.  If the clicked open port is another supported
+            # size, insert the stocked transition automatically rather than silently
+            # changing the selected duct back to the clicked size.
+            auto_transition = auto_catalog_transition_from_start_port!(snapped_port)
+
+            if auto_transition == :inserted
+              view.invalidate if view
+              return
+            elsif [:unsupported, :failed].include?(auto_transition)
+              ::UI.messagebox("Could not create the automatic catalog transition here.") if auto_transition == :failed
+              view.invalidate if view
+              return
+            end
+
             @last_port = snapped_port
             @start_point = nil
             @orthogonal_axis_lock = nil
@@ -503,3 +524,4 @@ module DuctExtension
     end
   end
 end
+

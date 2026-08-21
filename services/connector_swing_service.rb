@@ -82,10 +82,11 @@ module DuctExtension
         )
         return { status: :no_piece } unless piece
 
-        if Catalog::Manager.catalog_locked_piece?(piece)
-          return { status: :catalog_locked, piece: piece }
-        end
-
+        # Catalog fittings are stocked rigid parts, but rotating the entire part
+        # around an already-connected straight-through axis does not deform it or
+        # change its SKU.  Keep the same safety rules as Base mode (only tee/cross/
+        # wye, and only while the branch side is not fully constrained), but do not
+        # reject a piece merely because it carries catalog metadata.
         unless SWINGABLE_TYPES.include?(piece.type.to_sym)
           return { status: :not_swingable, piece: piece }
         end
@@ -532,7 +533,11 @@ module DuctExtension
         delta = shortest_angle_delta(session.current_angle, target_angle)
         return true if delta.abs <= EPSILON
 
-        if session.rectangular
+        catalog_piece = Catalog::Manager.catalog_locked_piece?(session.piece)
+
+        if session.rectangular && !catalog_piece
+          # Generic rectangular fittings are rebuilt so their rectangular frame
+          # remains well-defined after a swing.
           rotation = Geom::Transformation.rotation(
             session.axis_data[:pivot],
             session.axis_data[:axis],
@@ -550,6 +555,9 @@ module DuctExtension
           )
           return false unless success
         else
+          # Round fittings — and every stocked catalog fitting — are rigid-body
+          # rotated.  This preserves the exact catalog mesh and all SKU metadata
+          # rather than rebuilding it as generic geometry.
           transformation = Geom::Transformation.rotation(
             session.axis_data[:pivot],
             session.axis_data[:axis],

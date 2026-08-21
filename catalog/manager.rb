@@ -547,7 +547,6 @@ module DuctExtension
         group.set_attribute(DICTIONARY, "nominal_width", product.width.to_f) if product.width
         group.set_attribute(DICTIONARY, "nominal_height", product.height.to_f) if product.height
         group.set_attribute(DICTIONARY, "branch_diameter", product.branch_diameter.to_f) if product.branch_diameter
-        group.set_attribute(DICTIONARY, "stock_length", product.stock_length.to_f) if product.stock_length
         group.set_attribute(DICTIONARY, "catalog_document", MasterFlow::CATALOG_DOCUMENT)
 
         if product.overall
@@ -840,7 +839,7 @@ module DuctExtension
             klass = compatible ? "compatible" : ""
             "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td></tr>"
           end.join
-          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Connections / stock size</th></tr></thead><tbody>#{body}</tbody></table></section>"
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Connections / size</th></tr></thead><tbody>#{body}</tbody></table></section>"
         end.join
 
         current_html =
@@ -884,9 +883,9 @@ module DuctExtension
         case product.family
         when :pipe
           if product.shape.to_sym == :round
-            "#{number_label(product.diameter)}\" round × #{number_label(product.stock_length)}\" stock"
+            "#{number_label(product.diameter)}\" round; continuous model run"
           else
-            "#{number_label(product.width)}\" × #{number_label(product.height)}\" × #{number_label(product.stock_length)}\" stock"
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\"; continuous model run"
           end
         when :elbow
           product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, 90° configured" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", 90°"
@@ -1175,7 +1174,7 @@ module DuctExtension
             klass = compatible ? "compatible" : ""
             "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td><td>#{html_escape(product_envelope_text(product))}</td></tr>"
           end.join
-          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / stock size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
         end.join
 
         current_html =
@@ -1197,7 +1196,7 @@ module DuctExtension
           .legend{font-size:12px;margin:8px 0}.green,.red{display:inline-block;width:12px;height:12px;border:1px solid #aaa;vertical-align:middle;margin-right:4px}.green{background:#e8f7e8}.red{background:#fff0f0}
           </style></head><body>
           <h1>Master Flow — Simple Duct catalog</h1>
-          <div class="note">Only product families Simple Duct currently models are shown. A missing fitting is treated as genuinely unavailable in strict catalog mode; the extension does not substitute generic geometry. SKU/model numbers, nominal connector sizes, and stock lengths are the catalog-authoritative values. Physical-envelope values are shown separately only where a measurement is loaded, so nominal size is never confused with body geometry. Round adjustable elbows may be modeled at installed angles through 90°. Long straight runs stay one semantic/modeling piece while repeating the selected stock product's visual section pattern; stock-quantity metadata is retained for takeoff.</div>
+          <div class="note">Only product families Simple Duct currently models are shown. A missing fitting is treated as genuinely unavailable in strict catalog mode; the extension does not substitute generic geometry. SKU/model numbers and nominal connector sizes are the catalog-authoritative values. Physical-envelope values are shown separately only where a measurement is loaded, so nominal size is never confused with body geometry. Round adjustable elbows may be modeled at installed angles through 90°. Straight runs are modeled as continuous arbitrary-length pieces with no intermediate section joints or piece-count segmentation.</div>
           #{current_html}
           <div class="warning"><b>Important:</b> Master Flow sells several rectangular straight-duct sizes without a matching elbow in RESMF164. Those rows are intentionally marked <b>STRAIGHT ONLY</b>.</div>
           <h2>Buildability by duct size</h2>
@@ -1213,9 +1212,9 @@ module DuctExtension
         case product.family
         when :pipe
           if product.shape.to_sym == :round
-            "#{number_label(product.diameter)}\" round × #{number_label(product.stock_length)}\" stock"
+            "#{number_label(product.diameter)}\" round; continuous model run"
           else
-            "#{number_label(product.width)}\" × #{number_label(product.height)}\" × #{number_label(product.stock_length)}\" stock"
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\"; continuous model run"
           end
         when :elbow
           product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, 90° configured" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", 90°"
@@ -1590,7 +1589,7 @@ module DuctExtension
             klass = compatible ? "compatible" : ""
             "<tr class='#{klass}'><td><b>#{html_escape(product.sku)}</b></td><td>#{html_escape(product.name)}</td><td>#{html_escape(product_connector_text(product))}</td><td>#{html_escape(product_envelope_text(product))}</td></tr>"
           end.join
-          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / stock size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
+          "<section><h2>#{heading}</h2><table><thead><tr><th>Model</th><th>Product</th><th>Catalog connections / size</th><th>Loaded physical envelope</th></tr></thead><tbody>#{body}</tbody></table></section>"
         end.join
 
         current_html = if current
@@ -1609,7 +1608,7 @@ module DuctExtension
           th{background:#eee;position:sticky;top:0}.compatible,.current-row{background:#e8f7e8}.straight-only{background:#fff0f0}.current-row.straight-only{background:#ffe6cc}
           </style></head><body>
           <h1>Master Flow — Simple Duct catalog</h1>
-          <div class="note">Long modeled runs are visually continuous from the start and end you choose; stock-length metadata is retained for takeoff but no virtual stock joints are drawn. Beaded pipe keeps reinforcement/detailing. Inline Add Tee uses TS6 where compatible, and Add Wye Saddle uses 45YS4 on an equal-or-larger round main. Compatible register boxes, appliance wall vents, screened fresh-air vents, and end caps are offered through Add Vent.</div>
+          <div class="note">Straight duct is grouped by connector size/style and modeled continuously from the start and end you choose; no intermediate circumference lines are drawn. Inline Add Tee uses TS6 where compatible, and Add Wye Saddle uses 45YS4 on an equal-or-larger round main. Compatible register boxes, appliance wall vents, screened fresh-air vents, and end caps are offered through Add Vent.</div>
           #{current_html}
           <div class="warning"><b>Catalog truthfulness:</b> full-flow tees/wyes and side saddles are different product families. Simple Duct now keeps those placement behaviors separate.</div>
           <h2>Buildability by duct size</h2>
@@ -1623,9 +1622,9 @@ module DuctExtension
         case product.family
         when :pipe
           if product.shape.to_sym == :round
-            "#{number_label(product.diameter)}\" round; stock SKU length #{number_label(product.stock_length)}\" (continuous model run)"
+            "#{number_label(product.diameter)}\" round; continuous model run"
           else
-            "#{number_label(product.width)}\" × #{number_label(product.height)}\"; stock SKU length #{number_label(product.stock_length)}\" (continuous model run)"
+            "#{number_label(product.width)}\" × #{number_label(product.height)}\"; continuous model run"
           end
         when :elbow
           product.shape.to_sym == :round ? "#{number_label(product.diameter)}\" round, adjustable through 90°" : "#{number_label(product.width)}\" × #{number_label(product.height)}\", fixed 90°"

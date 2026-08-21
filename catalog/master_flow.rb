@@ -2,7 +2,7 @@ module DuctExtension
   module Catalog
     # Master Flow catalog data for the product families currently modeled by
     # Simple Duct. SKU/model numbers, stocked nominal connector sizes, product
-    # families, and stock straight-duct lengths follow RESMF164/GAF product
+    # families and connector sizes follow RESMF164/GAF product
     # listings. Optional `overall` values are physical-envelope measurements
     # carried by the catalog geometry layer; they are used to size rigid product
     # geometry but are intentionally kept distinct from nominal connector sizes.
@@ -21,7 +21,6 @@ module DuctExtension
         :height,
         :branch_diameter,
         :outlet_diameter,
-        :stock_length,
         :angle_degrees,
         :overall,
         :transition_length,
@@ -58,84 +57,67 @@ module DuctExtension
         Product.new(**kwargs)
       end
 
-      # ---- STRAIGHT ROUND DUCT -------------------------------------------------
-      # RESMF164 lists 2-ft and 3-ft snap-lock pipe, 5-ft beaded pipe, and
-      # standard 5-ft round metal duct. All listed sizes are represented.
+      # ---- STRAIGHT DUCT -------------------------------------------------------
+      # Modeling policy: a straight run is continuous for as long as the user
+      # draws it. RESMF164 contains multiple packaged lengths for some sizes, but
+      # those package-length variants are deliberately collapsed here so they do
+      # not create duplicate modeling choices or artificial joints. The retained
+      # SKU is a real representative product for that connector size/style.
       ROUND_PIPES = begin
         products = []
 
-        [3, 4, 5, 6, 7, 8].each do |diameter|
-          products << product(
-            sku: "BCP#{diameter}X24",
-            family: :pipe,
-            name: "#{diameter}\" Round Metal Duct Pipe, 2 ft section",
-            shape: :round,
-            diameter: diameter.to_f,
-            stock_length: 24.0,
-            style: :snap_lock
-          )
-          products << product(
-            sku: "BCP#{diameter}X36",
-            family: :pipe,
-            name: "#{diameter}\" Round Metal Duct Pipe, 3 ft section",
-            shape: :round,
-            diameter: diameter.to_f,
-            stock_length: 36.0,
-            style: :snap_lock
-          )
-        end
-
-        [4, 5, 6, 7, 8, 10, 12].each do |diameter|
-          products << product(
-            sku: "BDCP#{diameter}X60",
-            family: :pipe,
-            name: "#{diameter}\" Beaded Metal Duct Pipe, 5 ft section",
-            shape: :round,
-            diameter: diameter.to_f,
-            stock_length: 60.0,
-            style: :beaded
-          )
-        end
-
+        # Standard snap-lock round pipe: one modeling choice per diameter.
         [3, 4, 5, 6, 7, 8, 10, 12, 14].each do |diameter|
           products << product(
             sku: "CP#{diameter}X60",
             family: :pipe,
-            name: "#{diameter}\" Round Metal Duct Pipe, 5 ft section",
+            name: "#{diameter}\" Round Metal Duct Pipe",
             shape: :round,
             diameter: diameter.to_f,
-            stock_length: 60.0,
-            style: :snap_lock
+            style: :snap_lock,
+            notes: "One continuous modeling choice per connector size/style; modeled run length is unrestricted."
+          )
+        end
+
+        # Beaded pipe remains a separate physical style where the catalog offers it,
+        # but its model run is likewise not constrained to a packaged length.
+        [4, 5, 6, 7, 8, 10, 12].each do |diameter|
+          products << product(
+            sku: "BDCP#{diameter}X60",
+            family: :pipe,
+            name: "#{diameter}\" Beaded Metal Duct Pipe",
+            shape: :round,
+            diameter: diameter.to_f,
+            style: :beaded,
+            notes: "One continuous modeling choice per connector size/style; modeled run length is unrestricted."
           )
         end
 
         products.freeze
       end
 
-      # ---- STRAIGHT RECTANGULAR DUCT -----------------------------------------
+      # Duplicate rectangular package lengths are collapsed by connector size too.
+      # Where RESMF164 has more than one length for the same size, retain one real
+      # representative SKU while allowing the modeled run to be arbitrary length.
       RECTANGULAR_PIPES = [
-        ["RD12X8X48",      12.0, 8.0,  48.0],
-        ["RD14X8X48",      14.0, 8.0,  48.0],
-        ["RD16X8X48",      16.0, 8.0,  48.0],
-        ["RD24X8X48",      24.0, 8.0,  48.0],
-        ["RD2.25X12X24",   12.0, 2.25, 24.0],
-        ["RD3.25X10X36",   10.0, 3.25, 36.0],
-        ["RD3.25X12X36",   12.0, 3.25, 36.0],
-        ["RD3.25X14X36",   14.0, 3.25, 36.0],
-        ["RD3.25X10X60",   10.0, 3.25, 60.0],
-        ["RD3.25X12X60",   12.0, 3.25, 60.0],
-        ["RD3.25X14X60",   14.0, 3.25, 60.0]
-      ].map do |sku, width, height, stock_length|
+        ["RD12X8X48",     12.0, 8.0],
+        ["RD14X8X48",     14.0, 8.0],
+        ["RD16X8X48",     16.0, 8.0],
+        ["RD24X8X48",     24.0, 8.0],
+        ["RD2.25X12X24",  12.0, 2.25],
+        ["RD3.25X10X60",  10.0, 3.25],
+        ["RD3.25X12X60",  12.0, 3.25],
+        ["RD3.25X14X60",  14.0, 3.25]
+      ].map do |sku, width, height|
         product(
           sku: sku,
           family: :pipe,
-          name: "#{width.to_s.sub('.0','')}\" x #{height.to_s.sub('.0','')}\" Rectangular Duct, #{stock_length.to_i / 12} ft section",
+          name: "#{width.to_s.sub('.0','')}\" x #{height.to_s.sub('.0','')}\" Rectangular Duct",
           shape: :rectangular,
           width: width,
           height: height,
-          stock_length: stock_length,
           style: :half_section,
-          notes: "Catalog product is sold in half sections; modeled geometry is the assembled rectangular duct."
+          notes: "One continuous modeling choice per connector size; modeled run length is unrestricted."
         )
       end.freeze
 

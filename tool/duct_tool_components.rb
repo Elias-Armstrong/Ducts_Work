@@ -25,7 +25,24 @@ module DuctExtension
         end
 
         dimensions = Model::Port.dimensions_from_params({}, pipe_piece.ports.first)
-        input = prompt_for_vent(dimensions)
+        adopt_catalog_target_dimensions!(pipe_piece.ports.first)
+
+        # Catalog components carry their own connector/opening dimensions. The
+        # old generic vent-size dialog only affected generic geometry and was
+        # confusing in strict catalog mode, so skip it entirely there.
+        input =
+          if Catalog::Manager.active?(Sketchup.active_model)
+            {
+              register_width: nil,
+              register_height: nil,
+              register_bumped_out: true,
+              cover_diameter: nil,
+              cover_width: nil,
+              cover_height: nil
+            }
+          else
+            prompt_for_vent(dimensions)
+          end
         return unless input
 
         result = Services::VentInsertService.insert_on_piece(
@@ -389,6 +406,7 @@ module DuctExtension
           return
         end
 
+        adopt_catalog_target_dimensions!(snapped_port)
         side_vector = send(config[:side_selector], snapped_port)
         result = config[:service].insert_at_port(
           model: Sketchup.active_model,
@@ -438,6 +456,7 @@ module DuctExtension
           return
         end
 
+        adopt_catalog_target_dimensions!(snapped_port)
         input = prompt_for_reducer_size(snapped_port)
         return unless input
 
@@ -484,6 +503,8 @@ module DuctExtension
           else
             { shape: @duct_shape }
           end
+
+        adopt_catalog_target_dimensions!(pipe_piece.ports[0]) if pipe_piece.ports && pipe_piece.ports[0]
 
         branch_direction =
           if dimensions[:shape] == :rectangular
@@ -546,6 +567,7 @@ module DuctExtension
         end
 
         dimensions = Model::Port.dimensions_from_params({}, pipe_piece.ports[0])
+        adopt_catalog_target_dimensions!(pipe_piece.ports[0])
         unless dimensions[:shape] == :round
           ::UI.messagebox("Master Flow 45YS4 is a round-pipe saddle. Click an existing round duct pipe.")
           return
@@ -589,6 +611,98 @@ module DuctExtension
         puts "DuctTool.handle_manual_wye_saddle_click failed: #{error.message}"
         puts error.backtrace.join("\n") if error.backtrace
         ::UI.messagebox("Could not insert wye saddle. Check the Ruby Console for details.")
+      end
+
+      # In catalog mode, component availability follows the semantic duct that
+      # was actually clicked, not whatever size happened to be selected earlier.
+      # This keeps subsequent prompts/status aligned when jumping between, for
+      # example, a rectangular trunk and a 6-inch round branch.
+      # When a new catalog run is started from an existing open port, preserve
+      # the duct size/product the user selected for the new run. If that differs
+      # from the clicked port, insert the real stocked reducer/increaser/adapter
+      # automatically when the active catalog contains one.
+      #
+      # Return values:
+      #   :same        - no transition is needed
+      #   :inserted    - a catalog transition was inserted and @last_port moved
+      #   :unsupported - sizes differ but the catalog has no matching transition
+      #   :failed      - a matching product exists but insertion failed
+      def auto_catalog_transition_from_start_port!(stem_port)
+        return :same unless stem_port
+        return :same unless Catalog::Manager.active?(Sketchup.active_model)
+
+        source_dimensions = Model::Port.dimensions_from_params({}, stem_port)
+        target_dimensions = {
+          shape: @duct_shape,
+          diameter: @current_diameter,
+          width: @current_width,
+          height: @current_height
+        }
+
+        source = Model::DuctDimensions.coerce(source_dimensions)
+        target = Model::DuctDimensions.coerce(target_dimensions, fallback: source)
+        return :same if source.shape == target.shape && source.same_size?(target, tolerance: Catalog::Manager::TOLERANCE)
+
+        product = Catalog::Manager.transition_product(source_dimensions, target_dimensions, Sketchup.active_model)
+        unless product
+          # The click path removes temporary open-port caps before arriving here.
+          # Restore the cap because no connection was actually made.
+          Services::PortCapService.add(stem_port.piece.group, stem_port) if stem_port.piece && stem_port.piece.group
+          ::UI.messagebox(
+            "The selected catalog duct (#{Catalog::Manager.dimensions_label(target_dimensions)}) cannot start from " \
+            "this #{Catalog::Manager.dimensions_label(source_dimensions)} port because the loaded catalog has no matching reducer/increaser or converter.\n\n" \
+            "Choose a compatible catalog duct size, or start the run somewhere else."
+          )
+          return :unsupported
+        end
+
+        fallback_length = Geometry::ReducerBuilder.default_length(source_dimensions, target_dimensions)
+        length = Catalog::Manager.transition_length(product, fallback_length)
+
+        result = Services::EndReducerInsertService.insert_at_port(
+          model: Sketchup.active_model,
+          network: @network,
+          stem_port: stem_port,
+          new_shape: target.shape,
+          new_diameter: target.round? ? target.diameter : nil,
+          new_width: target.rectangular? ? target.width : nil,
+          new_height: target.rectangular? ? target.height : nil,
+          length: length
+        )
+
+        unless result && result[:new_port]
+          Services::PortCapService.add(stem_port.piece.group, stem_port) if stem_port.piece && stem_port.piece.group
+          return :failed
+        end
+
+        @last_port = result[:new_port]
+        @start_point = nil
+        @orthogonal_axis_lock = nil
+        reset_typed_length
+        @network.rebuild_index! if @network.respond_to?(:rebuild_index!)
+
+        Sketchup.status_text =
+          "Inserted Master Flow #{product.sku} automatically. Click the next point to continue with #{Catalog::Manager.dimensions_label(target_dimensions)} duct."
+        :inserted
+      rescue => error
+        puts "DuctTool.auto_catalog_transition_from_start_port! failed: #{error.message}"
+        puts error.backtrace.join("\n")
+        :failed
+      end
+
+      def adopt_catalog_target_dimensions!(port)
+        return false unless port
+        return false unless Catalog::Manager.active?(Sketchup.active_model)
+
+        copy_dimensions_from_port(port)
+        set_duct_tool_class_setting(:@@last_duct_shape, @duct_shape)
+        set_duct_tool_class_setting(:@@last_diameter, @current_diameter)
+        set_duct_tool_class_setting(:@@last_width, @current_width)
+        set_duct_tool_class_setting(:@@last_height, @current_height)
+        true
+      rescue => error
+        puts "DuctTool.adopt_catalog_target_dimensions failed: #{error.message}"
+        false
       end
 
       def try_auto_tee_target(view, x, y, clicked_point)
@@ -740,3 +854,4 @@ module DuctExtension
     end
   end
 end
+

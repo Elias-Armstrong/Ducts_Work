@@ -3,7 +3,7 @@ module DuctExtension
     # Geometry used only when Master Flow catalog mode is active. These builders
     # intentionally favor recognizable fabricated sheet-metal construction:
     # segmented adjustable elbows, hard/mitered rectangular elbows, straight
-    # tee/wye shells, hemmed reducers, and visible stock-pipe seams.
+    # tee/wye shells, hemmed reducers, and visible sheet-metal pipe seams.
     module MasterFlowGeometry
       EPSILON = 0.000001
       ROUND_SEGMENTS = Geometry::PipeBuilder::SEGMENTS
@@ -52,9 +52,9 @@ module DuctExtension
         return false unless success
 
         if dims.round?
-          add_round_pipe_stock_details(group, start_point, end_point, dims.diameter, product)
+          add_round_pipe_surface_details(group, start_point, end_point, dims.diameter, product)
         else
-          add_rectangular_pipe_stock_details(
+          add_rectangular_pipe_surface_details(
             group,
             start_point,
             end_point,
@@ -1132,7 +1132,7 @@ module DuctExtension
       end
       private_class_method :hide_cross_section_boundary
 
-      def add_round_pipe_stock_details(group, start_point, end_point, diameter, product)
+      def add_round_pipe_surface_details(group, start_point, end_point, diameter, product)
         direction = normalized(start_point.vector_to(end_point))
         return unless direction
         axis_a, axis_b = round_basis(direction)
@@ -1142,36 +1142,29 @@ module DuctExtension
         return if length <= EPSILON
 
         # Modeling policy: one requested run is one continuous sheet-metal run.
-        # Do not draw virtual 2/3/5-ft stock joints.  Keep only product-specific
+        # Do not draw intermediate circumference joints. Keep only product-specific
         # construction texture that actually helps identify the pipe family.
         seam_start = start_point.offset(axis_a, radius)
         seam_end = end_point.offset(axis_a, radius)
         visible_line(group.entities, seam_start, seam_end)
 
-        if product && product.style == :beaded
-          # Beads are reinforcement texture, not stock-piece boundaries. Repeat
-          # them on a stable pitch across the continuous modeled run.
-          bead_pitch = 20.0
-          offset = bead_pitch
-          while offset < length - 0.35
-            center = start_point.offset(direction, offset)
-            reveal_ring(group.entities, round_ring_points(center, axis_a, axis_b, radius * 1.012))
-            offset += bead_pitch
-          end
-        end
+        # Do not add any repeated circumference rings to straight duct. Even for
+        # beaded catalog products, the modeled run should read as one continuous
+        # piece. Product identity remains in SKU/style metadata and the longitudinal
+        # sheet-metal seam instead of periodic cross-section lines.
       rescue => error
-        puts "MasterFlowGeometry.add_round_pipe_stock_details failed: #{error.message}"
+        puts "MasterFlowGeometry.add_round_pipe_surface_details failed: #{error.message}"
       end
-      private_class_method :add_round_pipe_stock_details
+      private_class_method :add_round_pipe_surface_details
 
-      def add_rectangular_pipe_stock_details(group, start_point, end_point, dimensions, product, preferred_width_axis, preferred_height_axis)
-        # Deliberately no virtual stock-section rings. Rectangular runs remain one
+      def add_rectangular_pipe_surface_details(group, start_point, end_point, dimensions, product, preferred_width_axis, preferred_height_axis)
+        # Deliberately no intermediate cross-section rings. Rectangular runs remain one
         # visually continuous run from the user's chosen start to chosen end.
         true
       rescue => error
-        puts "MasterFlowGeometry.add_rectangular_pipe_stock_details failed: #{error.message}"
+        puts "MasterFlowGeometry.add_rectangular_pipe_surface_details failed: #{error.message}"
       end
-      private_class_method :add_rectangular_pipe_stock_details
+      private_class_method :add_rectangular_pipe_surface_details
 
       def add_stack_boot_details(group:, start_point:, end_point:, start_dimensions:, end_dimensions:, preferred_width_axis:, preferred_height_axis:)
         vector = normalized(start_point.vector_to(end_point))

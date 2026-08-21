@@ -42,10 +42,24 @@ module DuctExtension
     module DuctToolMenu
       private
 
-      def populate_duct_tool_menu(menu, _flags, _x, _y, _view)
+      def populate_duct_tool_menu(menu, _flags, x, y, view)
+        # Keep getMenu itself deliberately lightweight. Right-click has been a
+        # fragile path historically, so merely remember the click location here;
+        # resolve the actual semantic duct piece only after a menu command is
+        # chosen.
+        remember_context_click(view, x, y)
+
+        if Catalog::Manager.active?(Sketchup.active_model)
+          menu.add_item("Browse Compatible Catalog for Clicked Piece...") {
+            show_catalog_for_context_click
+          }
+        end
+
         menu.add_item("Catalog: #{Catalog::Manager.active_name(Sketchup.active_model)}...") {
           Catalog::Manager.prompt_set_catalog(Sketchup.active_model)
         }
+        menu.add_separator
+        menu.add_item("Start New Run (N)") { start_new_disconnected_run }
         menu.add_separator
         add_mode_menu_items(menu)
         menu.add_separator
@@ -184,7 +198,110 @@ module DuctExtension
         puts "DuctToolMenu.add_vent_repeat_menu failed: #{error.message}"
       end
 
+      def remember_context_click(view, x, y)
+        @context_click_view = view
+        @context_click_x = x
+        @context_click_y = y
+      rescue
+        clear_context_click
+      end
+
+      def resolve_context_target!
+        @context_target_piece = nil
+        @context_target_port = nil
+        @context_target_dimensions = nil
+
+        view = @context_click_view
+        x = @context_click_x
+        y = @context_click_y
+        return false unless @network && view && !x.nil? && !y.nil?
+
+        # Inline attachments should follow the pipe body that was actually
+        # right-clicked. End fittings fall back to an open semantic port.
+        piece = Services::SnapService.picked_pipe_piece(
+          network: @network, view: view, x: x, y: y
+        )
+
+        if piece && piece.ports && piece.ports.first
+          @context_target_piece = piece
+          @context_target_port = piece.ports.first
+        else
+          ip = Sketchup::InputPoint.new
+          ip.pick(view, x, y)
+          point = ip.position
+          if point
+            snap = Services::SnapService.find_open_external_port(
+              network: @network, view: view, x: x, y: y, point: point
+            )
+            @context_target_port = snap && snap.port
+            @context_target_piece = @context_target_port && @context_target_port.piece
+          end
+        end
+
+        if @context_target_port
+          @context_target_dimensions = Model::Port.dimensions_from_params({}, @context_target_port)
+        end
+
+        !@context_target_dimensions.nil?
+      rescue => error
+        puts "DuctToolMenu.resolve_context_target failed: #{error.message}"
+        @context_target_piece = nil
+        @context_target_port = nil
+        @context_target_dimensions = nil
+        false
+      end
+
+      def show_catalog_for_context_click
+        resolved = resolve_context_target!
+        dimensions = resolved ? @context_target_dimensions : nil
+        Catalog::Manager.show_catalog_browser(
+          Sketchup.active_model,
+          dimensions: dimensions
+        )
+      rescue => error
+        puts "DuctToolMenu.show_catalog_for_context_click failed: #{error.message}"
+        Catalog::Manager.show_catalog_browser(Sketchup.active_model)
+      ensure
+        clear_context_target
+        clear_context_click
+      end
+
+      def adopt_context_target_dimensions!
+        return false unless resolve_context_target!
+        return false unless @context_target_port
+
+        copy_dimensions_from_port(@context_target_port)
+        set_duct_tool_class_setting(:@@last_duct_shape, @duct_shape)
+        set_duct_tool_class_setting(:@@last_diameter, @current_diameter)
+        set_duct_tool_class_setting(:@@last_width, @current_width)
+        set_duct_tool_class_setting(:@@last_height, @current_height)
+        true
+      rescue => error
+        puts "DuctToolMenu.adopt_context_target_dimensions failed: #{error.message}"
+        false
+      ensure
+        clear_context_target
+        clear_context_click
+      end
+
+      def clear_context_target
+        @context_target_piece = nil
+        @context_target_port = nil
+        @context_target_dimensions = nil
+      end
+
+      def clear_context_click
+        @context_click_view = nil
+        @context_click_x = nil
+        @context_click_y = nil
+      end
+
       def select_fitting_mode(mode, round_tee_from_click: false, status: nil)
+        # If the menu was opened over an existing duct, component placement should
+        # inherit THAT duct's connector dimensions rather than whatever shape/size
+        # happened to be selected when the tool was activated. This is especially
+        # important in catalog mode when jumping between round and rectangular runs.
+        adopt_context_target_dimensions!
         @fitting_mode = mode
 
         if round_tee_from_click
